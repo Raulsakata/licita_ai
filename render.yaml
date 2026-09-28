@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: licita-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PNCP_BASE_URL
+        value: https://pncp.gov.br/api/consulta/v1
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+  - type: web
+    name: licita-web
+    runtime: static
+    buildCommand: npm install && npm run build -w @licita/web
+    staticPublishPath: ./apps/web/dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
