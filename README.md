@@ -36,7 +36,7 @@ As consultas ao PNCP são persistidas em `licita_ai.pncp_opportunities`. A rota 
 - OpenCNPJ e avaliação: `GET /api/empresas/{cnpj}/elegibilidade`.
 - Consultas salvas: `GET /api/consultas-salvas`, `POST /api/consultas-salvas` e `DELETE /api/consultas-salvas/{id}` (persistidas em `licita_ai.saved_searches`).
 
-> Nota: `apps/api` (Node/Express) é uma implementação legada e não é usada no deploy — o `render.yaml` publica a API a partir do `Dockerfile` na raiz, que roda o FastAPI (`src/api.py`).
+> Nota: a API é exclusivamente o FastAPI em `src/api.py` (servida pelo `Dockerfile` na raiz via `render.yaml`). Uma implementação Node/Express paralela e não utilizada (`apps/api`) foi removida do repositório.
 
 Veja a arquitetura de dados e do painel em `docs/architecture.md`.
 
