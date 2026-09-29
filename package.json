@@ -1,0 +1,15 @@
+{
+  "name": "licita-ai",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w @licita/api\" \"npm run dev -w @licita/web\"",
+    "build": "npm run build -w @licita/api && npm run build -w @licita/web",
+    "start": "npm run start -w @licita/api",
+    "lint": "npm run lint -w @licita/api && npm run lint -w @licita/web"
+  },
+  "devDependencies": { "concurrently": "^9.1.2" },
+  "engines": { "node": ">=22" }
+}
+
