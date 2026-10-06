@@ -12,6 +12,12 @@ async def clear_response_cache() -> None:
         _response_cache.clear()
 
 
+async def invalidate_response_cache(url: str, params: dict | None = None) -> None:
+    cache_key = (url, tuple(sorted((params or {}).items())))
+    async with _cache_lock:
+        _response_cache.pop(cache_key, None)
+
+
 async def _get_json(url: str, params: dict | None = None, cache_ttl: int = 0) -> dict | list:
     cache_key = (url, tuple(sorted((params or {}).items())))
     now = time.monotonic()
@@ -62,11 +68,19 @@ async def get_pncp_contracts(params: dict) -> dict:
     )
 
 
+async def invalidate_pncp_contract_page(params: dict) -> None:
+    await invalidate_response_cache(f"{settings.pncp_base_url}/contratacoes/publicacao", params)
+
+
 async def get_pncp_proposals(params: dict) -> dict:
     return await _get_json(
         f"{settings.pncp_base_url}/contratacoes/proposta", params,
         settings.pncp_cache_ttl_seconds,
     )
+
+
+async def invalidate_pncp_proposal_page(params: dict) -> None:
+    await invalidate_response_cache(f"{settings.pncp_base_url}/contratacoes/proposta", params)
 
 
 async def get_open_cnpj(cnpj: str) -> dict:

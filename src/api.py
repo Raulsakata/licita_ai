@@ -128,16 +128,16 @@ async def public_summary(municipio: str | None = None, inicio: str | None = None
     start, end = resolve_period(inicio, fim)
     try:
         return await build_summary(start, end, resolve_municipality(municipio), only_mpe=somente_mpe)
-    except httpx.HTTPError as error:
-        raise HTTPException(502, "Falha ao consultar o PNCP") from error
+    except (httpx.HTTPError, RuntimeError) as error:
+        raise HTTPException(502, "O PNCP não conseguiu carregar todas as páginas solicitadas. Tente novamente mais tarde.") from error
 
 
 @app.get("/api/publico/abertos")
 async def public_open_notices(municipio: str | None = None, todos: bool = False, somente_mpe: bool = False):
     try:
         total, items, sample_complete, no_failures = await licitacoes.fetch_open(resolve_municipality(municipio), date.today())
-    except httpx.HTTPError as error:
-        raise HTTPException(502, "Falha ao consultar o PNCP") from error
+    except (httpx.HTTPError, RuntimeError) as error:
+        raise HTTPException(502, "O PNCP não conseguiu carregar todas as páginas solicitadas. Tente novamente mais tarde.") from error
     if somente_mpe:
         items = [item for item in items if licitacoes.has_me_epp_signal(item)]
         total = len(items)
@@ -157,8 +157,8 @@ async def municipality_notices(codigo: str, inicio: str | None = None, fim: str 
             licitacoes.fetch_open(municipality, date.today()),
             licitacoes.collect(start, end, municipality),
         )
-    except httpx.HTTPError as error:
-        raise HTTPException(502, "Falha ao consultar o PNCP") from error
+    except (httpx.HTTPError, RuntimeError) as error:
+        raise HTTPException(502, "O PNCP não conseguiu carregar todas as páginas solicitadas. Tente novamente mais tarde.") from error
     now = datetime.now().isoformat()
     open_items = [item for item in open_items if licitacoes.has_me_epp_signal(item)]
     open_ids = {item.get("numeroControlePNCP") for item in open_items}

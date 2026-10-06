@@ -1,7 +1,10 @@
 import asyncio
 from collections import defaultdict
 from datetime import date, datetime
-from src.extract import get_pncp_contracts, get_pncp_proposals
+from src.extract import (
+    get_pncp_contracts, get_pncp_proposals,
+    invalidate_pncp_contract_page, invalidate_pncp_proposal_page,
+)
 
 UF = "CE"
 IBGE_UF_CODE = "23"
@@ -9,6 +12,7 @@ DEFAULT_MODALITIES = (4, 6, 8)
 PAGE_SIZE = 50
 PAGE_BATCH_SIZE = 40
 PAGE_CONCURRENCY = 4
+PAGE_FETCH_ATTEMPTS = 3
 MAX_PERIOD_DAYS = 400
 
 ME_EPP_TERMS = (
@@ -76,8 +80,44 @@ def shift_years(value: date, years: int) -> date:
         return value.replace(year=value.year - years, day=28)
 
 
+async def _fetch_page_with_retries(fetch_page, number: int, expected_count: int | None = None):
+    last_error = None
+    for attempt in range(PAGE_FETCH_ATTEMPTS):
+        try:
+            response = await fetch_page(number, refresh=attempt > 0)
+            page_items = response.get("data") or [] if isinstance(response, dict) else []
+            required_count = expected_count
+            if required_count is None:
+                try:
+                    reported_total = int(response.get("totalRegistros") or 0) if isinstance(response, dict) else 0
+                    reported_pages = int(response.get("totalPaginas") or 0) if isinstance(response, dict) else 0
+                except (TypeError, ValueError):
+                    reported_total, reported_pages = 0, 0
+                has_page_total = isinstance(response, dict) and response.get("totalRegistros") is not None
+                has_page_count = isinstance(response, dict) and response.get("totalPaginas") is not None
+                if has_page_total:
+                    required_count = min(PAGE_SIZE, reported_total)
+                elif has_page_count:
+                    if reported_pages > number:
+                        required_count = PAGE_SIZE
+                    else:
+                        required_count = 1 if reported_pages > 1 else 0
+                else:
+                    required_count = 1
+            if isinstance(response, dict) and len(page_items) >= required_count:
+                return response
+            last_error = RuntimeError(f"PNCP retornou {len(page_items)} de {required_count} itens na página {number}")
+        except Exception as error:
+            last_error = error
+        if attempt + 1 < PAGE_FETCH_ATTEMPTS:
+            await asyncio.sleep(min(0.25 * (2 ** attempt), 2.0))
+    raise last_error or RuntimeError(f"Não foi possível carregar a página {number} do PNCP")
+
+
 async def _load_all_pages(first_response: dict, fetch_page) -> tuple[int, list[dict], bool, bool]:
     first_items = list(first_response.get("data") or [])
+    has_total = first_response.get("totalRegistros") is not None
+    has_pages = first_response.get("totalPaginas") is not None
     try:
         reported_total = int(first_response.get("totalRegistros") or 0)
         reported_pages = int(first_response.get("totalPaginas") or 0)
@@ -86,10 +126,20 @@ async def _load_all_pages(first_response: dict, fetch_page) -> tuple[int, list[d
     expected_pages = max(1, reported_pages, (reported_total + PAGE_SIZE - 1) // PAGE_SIZE)
     items = first_items
     no_failures = True
+
     for batch_start in range(2, expected_pages + 1, PAGE_BATCH_SIZE):
         batch_end = min(batch_start + PAGE_BATCH_SIZE, expected_pages + 1)
         responses = await asyncio.gather(
-            *(fetch_page(number) for number in range(batch_start, batch_end)),
+            *(
+                _fetch_page_with_retries(
+                    fetch_page,
+                    number,
+                    min(PAGE_SIZE, max(0, reported_total - (number - 1) * PAGE_SIZE)) if has_total else (
+                        PAGE_SIZE if number < expected_pages else (1 if expected_pages > 1 else 0)
+                    ),
+                )
+                for number in range(batch_start, batch_end)
+            ),
             return_exceptions=True,
         )
         for response in responses:
@@ -98,7 +148,11 @@ async def _load_all_pages(first_response: dict, fetch_page) -> tuple[int, list[d
                 continue
             items.extend(response.get("data") or [])
     total = max(reported_total, len(items))
-    sample_complete = no_failures and len(items) >= reported_total
+    total_matches = len(items) == reported_total if has_total else has_pages
+    identifiers = [item.get("numeroControlePNCP") for item in items]
+    unique_identifiers = {identifier for identifier in identifiers if identifier}
+    unique_records = len(unique_identifiers) == len(items)
+    sample_complete = no_failures and total_matches and unique_records and (has_total or has_pages)
     return total, items, sample_complete, no_failures
 
 
@@ -109,11 +163,14 @@ async def _fetch_modality(modality: int, start: date, end: date, municipality: s
     }
     base.update({"codigoMunicipioIbge": municipality} if municipality else {"uf": UF})
 
-    async def page(number: int):
+    async def page(number: int, refresh: bool = False):
         async with semaphore:
-            return await get_pncp_contracts({**base, "pagina": number})
+            params = {**base, "pagina": number}
+            if refresh:
+                await invalidate_pncp_contract_page(params)
+            return await get_pncp_contracts(params)
 
-    return await _load_all_pages(await page(1), page)
+    return await _load_all_pages(await _fetch_page_with_retries(page, 1), page)
 
 
 async def collect(start: date, end: date, municipality: str | None = None, modalities=DEFAULT_MODALITIES):
@@ -134,6 +191,8 @@ async def collect(start: date, end: date, municipality: str | None = None, modal
             key = item.get("numeroControlePNCP")
             if key and is_ceara(item):
                 unique[key] = item
+    if len(unique) != total:
+        sample_complete = False
     return total, list(unique.values()), sample_complete, no_failures
 
 
@@ -191,11 +250,16 @@ async def fetch_open(municipality: str | None, today: date):
     base.update({"codigoMunicipioIbge": municipality} if municipality else {"uf": UF})
     semaphore = asyncio.Semaphore(PAGE_CONCURRENCY)
 
-    async def page(number: int):
+    async def page(number: int, refresh: bool = False):
         async with semaphore:
-            return await get_pncp_proposals({**base, "pagina": number})
+            params = {**base, "pagina": number}
+            if refresh:
+                await invalidate_pncp_proposal_page(params)
+            return await get_pncp_proposals(params)
 
-    total, raw, complete, no_failures = await _load_all_pages(await page(1), page)
+    total, raw, complete, no_failures = await _load_all_pages(await _fetch_page_with_retries(page, 1), page)
     unique = {item.get("numeroControlePNCP"): item for item in raw if is_ceara(item) and item.get("numeroControlePNCP")}
     items = sorted(unique.values(), key=lambda item: str(item.get("dataEncerramentoProposta") or ""))
+    if len(items) != total:
+        complete = False
     return total, items, complete, no_failures

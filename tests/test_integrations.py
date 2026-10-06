@@ -187,19 +187,20 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_open_notices_fetch_all_reported_pages(self):
         total_pages = 12
+        total_records = total_pages * licitacoes.PAGE_SIZE
 
         async def get_page(params):
             page = params["pagina"]
-            payload = {"data": [{"numeroControlePNCP": f"page-{page}", "unidadeOrgao": {"ufSigla": "CE"}}]}
+            payload = {"data": [{"numeroControlePNCP": f"page-{page}-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(licitacoes.PAGE_SIZE)]}
             if page == 1:
-                payload.update({"totalRegistros": total_pages, "totalPaginas": total_pages})
+                payload.update({"totalRegistros": total_records, "totalPaginas": total_pages})
             return payload
 
         with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=get_page)) as pncp:
             total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6))
 
-        self.assertEqual(total, total_pages)
-        self.assertEqual(len(items), total_pages)
+        self.assertEqual(total, total_records)
+        self.assertEqual(len(items), total_records)
         self.assertEqual(pncp.await_count, total_pages)
         self.assertTrue(complete)
         self.assertTrue(no_failures)
@@ -227,6 +228,112 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(complete)
         self.assertTrue(no_failures)
 
+    async def test_open_notices_retries_short_page_response(self):
+        attempts = 0
+        first_page = {
+            "totalRegistros": 100, "totalPaginas": 2,
+            "data": [{"numeroControlePNCP": f"first-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(50)],
+        }
+
+        async def get_page(params):
+            nonlocal attempts
+            if params["pagina"] == 1:
+                return first_page
+            attempts += 1
+            count = 1 if attempts == 1 else 50
+            return {"data": [{"numeroControlePNCP": f"second-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(count)]}
+
+        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=get_page)), patch.object(licitacoes.asyncio, "sleep", new_callable=AsyncMock):
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6))
+
+        self.assertEqual(total, 100)
+        self.assertEqual(len(items), 100)
+        self.assertEqual(attempts, 2)
+        self.assertTrue(complete)
+        self.assertTrue(no_failures)
+
+    async def test_open_notices_retries_short_first_page_response(self):
+        total_pages = 12
+        total_records = total_pages * licitacoes.PAGE_SIZE
+        first_attempts = 0
+
+        async def get_page(params):
+            nonlocal first_attempts
+            page = params["pagina"]
+            count = licitacoes.PAGE_SIZE
+            if page == 1:
+                first_attempts += 1
+                count = 1 if first_attempts == 1 else licitacoes.PAGE_SIZE
+            payload = {
+                "data": [{"numeroControlePNCP": f"page-{page}-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(count)],
+            }
+            if page == 1:
+                payload.update({"totalRegistros": total_records, "totalPaginas": total_pages})
+            return payload
+
+        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=get_page)), patch.object(licitacoes.asyncio, "sleep", new_callable=AsyncMock):
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6))
+
+        self.assertEqual(total, total_records)
+        self.assertEqual(len(items), total_records)
+        self.assertEqual(first_attempts, 2)
+        self.assertTrue(complete)
+        self.assertTrue(no_failures)
+
+    async def test_short_cached_pncp_page_is_refetched_on_retry(self):
+        params = {"pagina": 1, "tamanhoPagina": licitacoes.PAGE_SIZE}
+        partial = {"totalRegistros": 50, "totalPaginas": 1, "data": [{"numeroControlePNCP": "partial"}]}
+        complete = {"totalRegistros": 50, "totalPaginas": 1, "data": [{"numeroControlePNCP": f"item-{i}"} for i in range(50)]}
+        client = FakeClient([FakeResponse(200, partial), FakeResponse(200, complete)])
+
+        async def fetch_page(number, refresh=False):
+            request_params = {**params, "pagina": number}
+            if refresh:
+                await extract.invalidate_pncp_proposal_page(request_params)
+            return await extract.get_pncp_proposals(request_params)
+
+        with patch("src.extract.httpx.AsyncClient", return_value=client), patch.object(licitacoes.asyncio, "sleep", new_callable=AsyncMock):
+            result = await licitacoes._fetch_page_with_retries(fetch_page, 1)
+
+        self.assertEqual(len(result["data"]), 50)
+        self.assertEqual(client.calls, 2)
+
+    async def test_open_notices_without_pagination_metadata_are_partial(self):
+        response = {"data": [{"numeroControlePNCP": "ce-1", "unidadeOrgao": {"ufSigla": "CE"}}]}
+        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(return_value=response)):
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6))
+
+        self.assertEqual((total, len(items)), (1, 1))
+        self.assertFalse(complete)
+        self.assertTrue(no_failures)
+
+    async def test_duplicate_records_across_pages_are_marked_partial(self):
+        first_page = {
+            "totalRegistros": 100, "totalPaginas": 2,
+            "data": [{"numeroControlePNCP": f"item-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(50)],
+        }
+        second_page = {
+            "data": [{"numeroControlePNCP": f"item-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(49)]
+                    + [{"numeroControlePNCP": "item-49", "unidadeOrgao": {"ufSigla": "CE"}}],
+        }
+        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=[first_page, second_page])):
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6))
+
+        self.assertEqual(total, 100)
+        self.assertEqual(len(items), 50)
+        self.assertFalse(complete)
+        self.assertTrue(no_failures)
+
+    async def test_open_notices_accept_explicit_empty_response(self):
+        response = {"totalPaginas": 0, "data": []}
+        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(return_value=response)) as pncp:
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6))
+
+        self.assertEqual((total, items), (0, []))
+        self.assertEqual(pncp.await_count, 1)
+        self.assertTrue(complete)
+        self.assertTrue(no_failures)
+
     async def test_public_open_route_exposes_partial_status(self):
         item = {"numeroControlePNCP": "ce-1", "unidadeOrgao": {"ufSigla": "CE"}}
         with patch.object(licitacoes, "fetch_open", AsyncMock(return_value=(120, [item], False, False))):
@@ -235,6 +342,24 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["total"], 120)
         self.assertTrue(response["amostra_limitada"])
         self.assertFalse(response["consulta_completa"])
+
+    async def test_public_open_route_reports_exhausted_page_retries(self):
+        with patch.object(licitacoes, "fetch_open", AsyncMock(side_effect=RuntimeError("Página incompleta"))):
+            with self.assertRaises(HTTPException) as raised:
+                await api.public_open_notices()
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIn("todas as páginas", raised.exception.detail)
+
+    async def test_municipality_route_reports_exhausted_open_page_retries(self):
+        with patch.object(licitacoes, "fetch_open", AsyncMock(side_effect=RuntimeError("Página incompleta"))), patch.object(
+            licitacoes, "collect", AsyncMock(return_value=(0, [], True, True)),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await api.municipality_notices("2304400", "2026-09-01", "2026-09-30")
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIn("todas as páginas", raised.exception.detail)
 
 
 if __name__ == "__main__":
