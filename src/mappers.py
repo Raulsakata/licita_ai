@@ -11,12 +11,22 @@ def normalize_company(data: dict, cnpj: str) -> dict:
     situacao = pick(data, "situacao_cadastral", "situacaoCadastral")
     if isinstance(situacao, dict):
         situacao = pick(situacao, "descricao", "codigo")
+    natureza = pick(data, "natureza_juridica", "naturezaJuridica")
+    if isinstance(natureza, dict):
+        natureza_codigo = pick(natureza, "codigo", "id")
+        natureza = pick(natureza, "descricao", "nome")
+    else:
+        natureza_codigo = pick(data, "codigo_natureza_juridica", "codigoNaturezaJuridica")
+    if natureza_codigo is not None:
+        natureza_codigo = str(natureza_codigo)
     return {
         "cnpj": cnpj,
         "razao_social": pick(data, "razao_social", "razaoSocial", "nomeEmpresarial"),
         "nome_fantasia": pick(data, "nome_fantasia", "nomeFantasia"),
         "porte": porte,
         "situacao_cadastral": situacao,
+        "natureza_juridica": natureza,
+        "natureza_juridica_codigo": natureza_codigo,
         "cnae_principal": pick(data, "cnae_fiscal", "cnaePrincipal", "cnae_principal"),
         "raw_data": data,
     }

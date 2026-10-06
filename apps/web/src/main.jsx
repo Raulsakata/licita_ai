@@ -1,52 +1,45 @@
-import { StrictMode, useEffect, useMemo, useState } from 'react';
+import { StrictMode, useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { supabase } from './lib/supabase';
-import './styles.css';
+import Public from './pages/Public';
+import Company from './pages/Company';
+import Admin from './pages/Admin';
+import './app.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-const dateValue = (offset = 0) => new Date(Date.now() + offset * 86400000).toISOString().slice(0, 10);
-const pncpDate = (value) => value.replaceAll('-', '');
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ROUTES = { '': 'inicio', '#/oportunidades': 'empresa', '#/administrador': 'admin' };
 
-function validateContactForm({ nome, email, mensagem }) {
-  const errors = {};
-  if (!nome || nome.trim().length < 2) errors.nome = 'Informe seu nome.';
-  if (!email || !EMAIL_PATTERN.test(email)) errors.email = 'Informe um e-mail válido.';
-  if (!mensagem || mensagem.trim().length < 10) errors.mensagem = 'Descreva sua mensagem com pelo menos 10 caracteres.';
-  return errors;
+// Sessão só dura a aba aberta; o token nunca vai para localStorage.
+function useSession(key) {
+  const [session, setSessionState] = useState(() => { try { return JSON.parse(sessionStorage.getItem(key)); } catch { return null; } });
+  const setSession = useCallback((value) => {
+    if (value) sessionStorage.setItem(key, JSON.stringify(value)); else sessionStorage.removeItem(key);
+    setSessionState(value);
+  }, [key]);
+  return [session, setSession];
 }
 
 function App() {
-  const [regions, setRegions] = useState([]), [cities, setCities] = useState([]), [region, setRegion] = useState(''), [city, setCity] = useState('');
-  const [start, setStart] = useState(dateValue(-30)), [end, setEnd] = useState(dateValue()), [opportunities, setOpportunities] = useState([]), [total, setTotal] = useState(0), [loading, setLoading] = useState(false), [error, setError] = useState('');
-  const [cnpj, setCnpj] = useState(''), [eligibility, setEligibility] = useState(null);
-  const [contactNome, setContactNome] = useState(''), [contactEmail, setContactEmail] = useState(''), [contactMensagem, setContactMensagem] = useState('');
-  const [contactErrors, setContactErrors] = useState({}), [contactStatus, setContactStatus] = useState('idle');
-  const [modalidades, setModalidades] = useState([]), [modalidade, setModalidade] = useState('6');
-  const [savedSearches, setSavedSearches] = useState([]), [savedSearchName, setSavedSearchName] = useState('');
-  useEffect(() => { fetch(`${API_URL}/api/geografia/regioes`).then((r) => r.json()).then(setRegions).catch(() => setError('Não foi possível carregar as regiões do IBGE.')); }, []);
-  useEffect(() => { fetch(`${API_URL}/api/pncp/modalidades`).then((r) => r.json()).then(setModalidades).catch(() => {}); }, []);
-  useEffect(() => { fetch(`${API_URL}/api/consultas-salvas`).then((r) => r.json()).then(setSavedSearches).catch(() => {}); }, []);
-  useEffect(() => { if (!region) return; setCity(''); setCities([]); fetch(`${API_URL}/api/geografia/regioes/${region}/municipios`).then((r) => r.json()).then(setCities).catch(() => setError('Não foi possível carregar os municípios.')); }, [region]);
-  const selectedCity = useMemo(() => cities.find((item) => String(item.id) === city), [cities, city]);
-  const cityName = selectedCity?.nome || 'Selecione uma cidade';
-  async function search(event) { event.preventDefault(); if (!city) return setError('Selecione uma cidade antes de consultar as licitações.'); if (!modalidade) return setError('Selecione a modalidade de contratação.'); setLoading(true); setError(''); try { const query = new URLSearchParams({ dataInicial: pncpDate(start), dataFinal: pncpDate(end), pagina: '1', tamanhoPagina: '20', codigoModalidadeContratacao: modalidade }); const response = await fetch(`${API_URL}/api/municipios/${city}/licitacoes?${query}`); const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || 'Consulta PNCP indisponível.'); setOpportunities(payload.data || []); setTotal(payload.totalRegistros ?? payload.data?.length ?? 0); } catch (requestError) { setOpportunities([]); setTotal(0); setError(requestError.message); } finally { setLoading(false); } }
-  async function saveCurrentSearch(event) { event.preventDefault(); if (!savedSearchName.trim()) return; const filters = { region, city, start, end, modalidade }; const response = await fetch(`${API_URL}/api/consultas-salvas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: savedSearchName.trim(), filters }) }); if (!response.ok) return setError('Não foi possível salvar a consulta.'); const created = await response.json(); setSavedSearches((current) => [created, ...current]); setSavedSearchName(''); }
-  function applySavedSearch(filters) { if (!filters) return; setRegion(filters.region || ''); setCity(filters.city || ''); setStart(filters.start || dateValue(-30)); setEnd(filters.end || dateValue()); setModalidade(filters.modalidade || '6'); }
-  async function deleteSavedSearch(id) { const response = await fetch(`${API_URL}/api/consultas-salvas/${id}`, { method: 'DELETE' }); if (response.ok) setSavedSearches((current) => current.filter((item) => item.id !== id)); }
-  async function checkCompany(event) { event.preventDefault(); setEligibility({ loading: true }); try { const response = await fetch(`${API_URL}/api/empresas/${encodeURIComponent(cnpj)}/elegibilidade`); const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || 'Empresa não localizada.'); setEligibility(payload); } catch (requestError) { setEligibility({ error: requestError.message }); } }
-  async function submitContact(event) {
-    event.preventDefault();
-    const dadosDoFormulario = { nome: contactNome.trim(), email: contactEmail.trim().toLowerCase(), mensagem: contactMensagem.trim() };
-    const validationErrors = validateContactForm(dadosDoFormulario);
-    setContactErrors(validationErrors);
-    if (Object.keys(validationErrors).length > 0) return;
-    setContactStatus('loading');
-    const { error: insertError } = await supabase.from('publica').insert({ payload: dadosDoFormulario });
-    if (insertError) { setContactStatus('error'); return; }
-    setContactStatus('success');
-    setContactNome(''); setContactEmail(''); setContactMensagem('');
-  }
-  return <div className="app-shell"><aside className="sidebar"><div className="brand"><span>◈</span><div><strong>Licita AI</strong><small>Radar de oportunidades</small></div></div><nav><a className="active">Visão geral</a><a>Oportunidades</a><a>Empresas ME/EPP</a><a>Consultas salvas</a></nav><footer>Dados públicos integrados<br />IBGE · PNCP · OpenCNPJ</footer></aside><main className="dashboard"><header className="topbar"><div><p className="eyebrow">INTELIGÊNCIA TERRITORIAL</p><h1>Encontre licitações por município</h1><p>Selecione uma região, escolha a cidade e avalie empresas de pequeno porte.</p></div><div className="source-status"><i />3 fontes conectadas</div></header><section className="filters card"><div className="section-heading"><div><span className="step">01</span><h2>Localização e período</h2></div><span className="helper">IBGE → PNCP</span></div><form onSubmit={search}><label>Região<select value={region} onChange={(e) => setRegion(e.target.value)}><option value="">Escolha a região</option>{regions.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label><label>Município<select value={city} onChange={(e) => setCity(e.target.value)} disabled={!region}><option value="">Escolha o município</option>{cities.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label><label>De<input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></label><label>Até<input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></label><label>Modalidade<select value={modalidade} onChange={(e) => setModalidade(e.target.value)} required><option value="">Escolha a modalidade</option>{modalidades.map((item) => <option key={item.codigo} value={item.codigo}>{item.nome}</option>)}</select></label><button disabled={loading}>{loading ? 'Consultando…' : 'Ver licitações'}</button></form></section><section className="saved-searches card"><div className="section-heading"><div><span className="step">02</span><h2>Consultas salvas</h2></div><span className="helper">Supabase</span></div><form onSubmit={saveCurrentSearch}><label>Nome da consulta<input value={savedSearchName} onChange={(e) => setSavedSearchName(e.target.value)} maxLength={120} placeholder="Ex.: Pregões em SP" /></label><button disabled={!city || !modalidade}>Salvar consulta atual</button></form>{savedSearches.length > 0 && <ul className="saved-list">{savedSearches.map((item) => <li key={item.id}><button type="button" onClick={() => applySavedSearch(item.filters)}>{item.name}</button><button type="button" className="link-danger" onClick={() => deleteSavedSearch(item.id)}>Remover</button></li>)}</ul>}</section><section className="metrics"><div className="metric card"><span>Município selecionado</span><strong>{cityName}</strong><small>{city ? `Código IBGE ${city}` : 'Aguardando seleção'}</small></div><div className="metric card"><span>Licitações encontradas</span><strong>{total}</strong><small>no período informado</small></div><div className="metric card"><span>Filtro empresarial</span><strong>ME / EPP</strong><small>situação ativa</small></div></section><section className="workspace"><div className="opportunities card"><div className="section-heading"><div><span className="step">03</span><h2>Oportunidades em {cityName}</h2></div><span className="helper">PNCP</span></div>{error && <p className="notice error">{error}</p>}{!loading && !error && !opportunities.length && <div className="empty">Escolha a cidade e consulte para carregar as licitações.</div>}<div className="table-wrap">{opportunities.length > 0 && <table><thead><tr><th>Objeto</th><th>Modalidade</th><th>Órgão</th><th>Publicação</th></tr></thead><tbody>{opportunities.map((item) => <tr key={item.numeroControlePNCP}><td><strong>{item.objetoCompra || item.objetoContratacao || 'Objeto não informado'}</strong><small>{item.numeroControlePNCP}</small></td><td><span className="tag">{item.modalidadeNome || '—'}</span></td><td>{item.orgaoEntidade?.razaoSocial || '—'}</td><td>{item.dataPublicacaoPncp || '—'}</td></tr>)}</tbody></table>}</div></div><aside className="company-card card"><div className="section-heading"><div><span className="step">04</span><h2>Verificar empresa</h2></div><span className="helper">OpenCNPJ</span></div><p>Digite o CNPJ para conferir se a empresa é ME/EPP e está ativa.</p><form onSubmit={checkCompany}><label>CNPJ<input value={cnpj} onChange={(e) => setCnpj(e.target.value)} placeholder="00.000.000/0001-00" required /></label><button>Verificar aptidão</button></form>{eligibility && <div className={`eligibility ${eligibility.apta_indicativamente ? 'approved' : 'rejected'}`}>{eligibility.loading ? <p>Consultando cadastro…</p> : eligibility.error ? <p>{eligibility.error}</p> : <><b>{eligibility.apta_indicativamente ? 'Apta indicativamente' : 'Não apta pelo filtro'}</b><strong>{eligibility.razao_social || eligibility.cnpj}</strong><dl><div><dt>Porte</dt><dd>{eligibility.porte || 'Não informado'}</dd></div><div><dt>Situação</dt><dd>{eligibility.situacao_cadastral || 'Não informada'}</dd></div></dl><small>{eligibility.motivo}</small></>}</div>}</aside></section><section className="chart card"><div className="section-heading"><div><span className="step">05</span><h2>Leitura rápida dos resultados</h2></div><span className="helper">Análise visual</span></div><div className="chart-body"><div className="bar"><i style={{ width: `${Math.min(total * 5, 100)}%` }} /></div><p><strong>{total}</strong> oportunidades carregadas para {cityName}. Conforme mais municípios forem consultados, esta área servirá como base para comparação regional.</p></div></section><section className="contact card"><div className="section-heading"><div><span className="step">06</span><h2>Fale conosco</h2></div><span className="helper">Envio direto ao banco</span></div><form onSubmit={submitContact}><label>Nome<input value={contactNome} onChange={(e) => setContactNome(e.target.value)} maxLength={120} required />{contactErrors.nome && <span className="field-error">{contactErrors.nome}</span>}</label><label>E-mail<input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} maxLength={160} required />{contactErrors.email && <span className="field-error">{contactErrors.email}</span>}</label><label>Mensagem<textarea value={contactMensagem} onChange={(e) => setContactMensagem(e.target.value)} maxLength={2000} required />{contactErrors.mensagem && <span className="field-error">{contactErrors.mensagem}</span>}</label><button disabled={contactStatus === 'loading'}>{contactStatus === 'loading' ? 'Enviando…' : 'Enviar mensagem'}</button></form>{contactStatus === 'success' && <p className="notice success">Mensagem enviada com sucesso.</p>}{contactStatus === 'error' && <p className="notice error">Não foi possível enviar sua mensagem agora. Tente novamente mais tarde.</p>}</section></main></div>;
+  const [hash, setHash] = useState(window.location.hash);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [company, setCompany] = useSession('licita.empresa');
+  const [admin, setAdmin] = useSession('licita.admin');
+  useEffect(() => { const onHash = () => { setHash(window.location.hash); setMenuOpen(false); window.scrollTo(0, 0); }; window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash); }, []);
+  const route = ROUTES[hash] || 'inicio';
+  const links = [['#', 'inicio', 'Início público', '◈'], ['#/oportunidades', 'empresa', 'Oportunidades', '▣'], ['#/administrador', 'admin', 'Administrador', '⚙']];
+  return (
+    <div className="app-shell">
+      <button type="button" className="menu-toggle" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>☰ Menu</button>
+      <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
+        <div className="brand"><span>◈</span><div><strong>Licita AI</strong><small>Licitações do Ceará</small></div></div>
+        <nav aria-label="Principal">{links.map(([href, id, label, icon]) => <a key={id} href={href} className={route === id ? 'active' : ''} aria-current={route === id ? 'page' : undefined}><i>{icon}</i>{label}</a>)}</nav>
+        <footer>Dados públicos<br />PNCP · IBGE · OpenCNPJ</footer>
+      </aside>
+      <main>
+        {route === 'inicio' && <Public />}
+        {route === 'empresa' && <Company session={company} setSession={setCompany} />}
+        {route === 'admin' && <Admin session={admin} setSession={setAdmin} />}
+      </main>
+    </div>
+  );
 }
+
 createRoot(document.getElementById('root')).render(<StrictMode><App /></StrictMode>);

@@ -10,7 +10,16 @@ class Settings(BaseSettings):
     ibge_base_url: str = "https://servicodados.ibge.gov.br/api/v1/localidades"
     database_url: str | None = None
     supabase_url: str | None = None
+    supabase_secret_key: str | None = None
     supabase_service_role_key: str | None = None
+    auth_secret: str | None = None
+    admin_user: str | None = None
+    admin_password: str | None = None
+    admin_password_hash: str | None = None
+    external_api_max_retries: int = 2
+    pncp_cache_ttl_seconds: int = 300
+    ibge_cache_ttl_seconds: int = 86400
+    open_cnpj_cache_ttl_seconds: int = 21600
 
 
 settings = Settings()

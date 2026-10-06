@@ -1,4 +1,5 @@
-"""Aplica a migração inicial no PostgreSQL/Supabase usando DATABASE_URL."""
+"""Aplica migrações PostgreSQL/Supabase usando DATABASE_URL."""
+import argparse
 import sys
 from pathlib import Path
 try:
@@ -11,6 +12,9 @@ sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("migration", nargs="?", help="nome de um arquivo SQL para aplicar individualmente")
+    args = parser.parse_args()
     if psycopg is None:
         print("Dependência ausente. Execute: python -m pip install -r requirements.txt")
         return 1
@@ -23,7 +27,18 @@ def main() -> int:
         print("DATABASE_URL não configurada no .env.")
         return 1
     migrations_dir = ROOT / "supabase/migrations"
-    migration_files = sorted(migrations_dir.glob("*.sql"))
+    if args.migration:
+        migration_name = Path(args.migration)
+        if migration_name.name != args.migration or migration_name.suffix != ".sql":
+            print("Informe somente o nome de um arquivo .sql dentro de supabase/migrations.")
+            return 1
+        selected_migration = migrations_dir / migration_name
+        if not selected_migration.is_file():
+            print(f"Migração não encontrada: {migration_name.name}")
+            return 1
+        migration_files = [selected_migration]
+    else:
+        migration_files = sorted(migrations_dir.glob("*.sql"))
     try:
         with psycopg.connect(settings.database_url) as connection:
             with connection.cursor() as cursor:

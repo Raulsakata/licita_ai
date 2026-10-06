@@ -20,3 +20,9 @@ def validate_cnpj(value: str) -> str:
             raise HTTPException(400, "CNPJ inválido")
     return cnpj
 
+
+
+
+
+
+
