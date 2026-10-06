@@ -232,6 +232,18 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             date.today() - timedelta(days=pncp_sync.REFRESH_LOOKBACK_DAYS), date.today(),
         ))
 
+    async def test_internal_sync_webhook_requires_shared_secret(self):
+        with patch.object(api.settings, "pncp_sync_secret", "long-random-secret"), patch.object(
+            pncp_sync, "run_scheduled_sync", AsyncMock(return_value={"status": "complete"}),
+        ) as run_sync:
+            with self.assertRaises(HTTPException) as raised:
+                await api.internal_pncp_sync("wrong-secret")
+            self.assertEqual(raised.exception.status_code, 401)
+            result = await api.internal_pncp_sync("long-random-secret")
+
+        self.assertEqual(result["status"], "complete")
+        run_sync.assert_awaited_once()
+
     def test_rejects_other_states_and_bad_periods(self):
         with self.assertRaises(HTTPException):
             api.resolve_municipality("2900000")

@@ -1,6 +1,7 @@
 import asyncio
 from datetime import date, datetime, timedelta, timezone
-from fastapi import Depends, FastAPI, HTTPException, Query
+from hmac import compare_digest
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from src import auth, cnae, licitacoes, pncp_sync
@@ -21,7 +22,7 @@ MODALIDADE_CODES = {item["codigo"] for item in PNCP_MODALIDADES}
 PUBLIC_COMPANY_KEYS = COMPANY_PUBLIC_COLUMNS.split(",")
 _pncp_scheduler_task: asyncio.Task | None = None
 
-app = FastAPI(title="Licita AI API", version="0.3.0")
+app = FastAPI(title="Licita AI API", version="0.4.0")
 app.add_middleware(
     CORSMiddleware, allow_origins=[origin.strip() for origin in settings.frontend_origin.split(",")],
     allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["*"],
@@ -153,6 +154,16 @@ async def public_summary(municipio: str | None = None, inicio: str | None = None
 @app.get("/api/publico/sincronizacao")
 async def public_sync_status():
     return await pncp_sync.sync_status()
+
+
+@app.post("/api/internal/sync-pncp", include_in_schema=False)
+async def internal_pncp_sync(x_pncp_sync_secret: str | None = Header(None)):
+    expected = settings.pncp_sync_secret
+    if not expected:
+        raise HTTPException(503, "Sincronização externa não configurada")
+    if not x_pncp_sync_secret or not compare_digest(x_pncp_sync_secret, expected):
+        raise HTTPException(401, "Credencial inválida")
+    return await pncp_sync.run_scheduled_sync()
 
 
 @app.get("/api/publico/abertos")

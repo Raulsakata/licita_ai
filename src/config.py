@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     admin_user: str | None = None
     admin_password: str | None = None
     admin_password_hash: str | None = None
+    pncp_sync_secret: str | None = None
     external_api_max_retries: int = 2
     pncp_cache_ttl_seconds: int = 300
     ibge_cache_ttl_seconds: int = 86400

@@ -10,7 +10,7 @@ from src.db import (
 from src.logger import logger
 
 SYNC_INTERVAL = timedelta(hours=12)
-INITIAL_BACKFILL_DAYS = 30
+INITIAL_BACKFILL_DAYS = 7
 REFRESH_LOOKBACK_DAYS = 30
 _sync_lock = asyncio.Lock()
 _open_sync_lock = asyncio.Lock()
@@ -62,6 +62,20 @@ def _items_from_rows(rows: list[dict], municipality: str | None, modalities: tup
     return list(items.values())
 
 
+async def _read_cached_period(start: date, end: date, municipality: str | None, modalities: tuple[int, ...]) -> list[dict]:
+    rows = await asyncio.to_thread(load_pncp_results, start, end, municipality)
+    if rows is None:
+        raise RuntimeError("Não foi possível carregar licitações do Supabase")
+    return _items_from_rows(rows, municipality, modalities)
+
+
+def _period_is_covered(start: date, end: date, modalities: tuple[int, ...], windows: list[dict]) -> bool:
+    return all(
+        not _missing_ranges(start, end, [row for row in windows if int(row["modality_code"]) == modality])
+        for modality in modalities
+    )
+
+
 async def collect(
     start: date,
     end: date,
@@ -71,6 +85,13 @@ async def collect(
 ) -> tuple[int, list[dict], bool, bool]:
     if get_db() is None:
         return await licitacoes.collect(start, end, municipality, modalities)
+
+    windows = await asyncio.to_thread(list_pncp_sync_windows, list(modalities))
+    if windows is None:
+        raise RuntimeError("Não foi possível consultar a cobertura PNCP no Supabase")
+    if not force_refresh and _period_is_covered(start, end, modalities, windows):
+        cached_items = await _read_cached_period(start, end, municipality, modalities)
+        return len(cached_items), cached_items, True, True
 
     async with _sync_lock:
         windows = await asyncio.to_thread(list_pncp_sync_windows, list(modalities))
@@ -113,14 +134,8 @@ async def collect(
                         "ends_on": gap_end.isoformat(),
                     })
 
-        rows = await asyncio.to_thread(load_pncp_results, start, end, municipality)
-        if rows is None:
-            raise RuntimeError("Não foi possível carregar licitações do Supabase")
-        items = _items_from_rows(rows, municipality, modalities)
-        coverage_ok = all(
-            not _missing_ranges(start, end, [row for row in windows if int(row["modality_code"]) == modality])
-            for modality in modalities
-        )
+        items = await _read_cached_period(start, end, municipality, modalities)
+        coverage_ok = _period_is_covered(start, end, modalities, windows)
         sample_complete = sample_complete and coverage_ok
         return len(items), items, sample_complete, no_failures
 
