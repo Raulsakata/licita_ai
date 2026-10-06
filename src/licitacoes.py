@@ -89,16 +89,18 @@ async def _fetch_modality(modality: int, start: date, end: date, municipality: s
     first = await page(1)
     items = list(first.get("data") or [])
     total = int(first.get("totalRegistros") or len(items))
-    last_page = min(int(first.get("totalPaginas") or 1), pages)
-    complete = True
+    expected_pages = max(1, int(first.get("totalPaginas") or (total + PAGE_SIZE - 1) // PAGE_SIZE))
+    last_page = min(expected_pages, pages)
+    no_failures = True
     if last_page > 1:
         rest = await asyncio.gather(*(page(n) for n in range(2, last_page + 1)), return_exceptions=True)
         for response in rest:
             if isinstance(response, Exception):
-                complete = False
+                no_failures = False
             else:
                 items.extend(response.get("data") or [])
-    return total, items, complete and len(items) >= total
+    complete = expected_pages <= pages and no_failures and len(items) >= total
+    return total, items, complete, no_failures
 
 
 async def collect(start: date, end: date, municipality: str | None = None, modalities=DEFAULT_MODALITIES, pages: int = MAX_PAGES):
@@ -109,10 +111,12 @@ async def collect(start: date, end: date, municipality: str | None = None, modal
     for result in results:
         if isinstance(result, Exception):
             no_failures = False
+            sample_complete = False
             continue
-        group_total, items, complete = result
+        group_total, items, complete, group_no_failures = result
         total += group_total
         sample_complete = sample_complete and complete
+        no_failures = no_failures and group_no_failures
         for item in items:
             key = item.get("numeroControlePNCP")
             if key and is_ceara(item):
@@ -175,7 +179,9 @@ async def fetch_open(municipality: str | None, today: date, limit: int = 50, pag
     response = await get_pncp_proposals({**base, "pagina": 1})
     raw = list(response.get("data") or [])
     total = int(response.get("totalRegistros") or len(raw))
-    last_page = min(int(response.get("totalPaginas") or 1), pages)
+    expected_pages = max(1, int(response.get("totalPaginas") or (total + PAGE_SIZE - 1) // PAGE_SIZE))
+    last_page = min(expected_pages, pages)
+    no_failures = True
     if last_page > 1:
         semaphore = asyncio.Semaphore(4)
 
@@ -185,8 +191,11 @@ async def fetch_open(municipality: str | None, today: date, limit: int = 50, pag
 
         rest = await asyncio.gather(*(page(n) for n in range(2, last_page + 1)), return_exceptions=True)
         for extra in rest:
-            if not isinstance(extra, Exception):
+            if isinstance(extra, Exception):
+                no_failures = False
+            else:
                 raw.extend(extra.get("data") or [])
     unique = {item.get("numeroControlePNCP"): item for item in raw if is_ceara(item) and item.get("numeroControlePNCP")}
     items = sorted(unique.values(), key=lambda item: str(item.get("dataEncerramentoProposta") or ""))
-    return total, items[:limit]
+    sample_complete = expected_pages <= pages and no_failures and len(raw) >= total and len(items) <= limit
+    return total, items[:limit], sample_complete, no_failures

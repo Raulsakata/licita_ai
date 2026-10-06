@@ -21,7 +21,7 @@ function MpeComparison({ initial }) {
       aside={<div className="row-gap"><Tabs value={metric} onChange={setMetric} options={[['quantidade_mpe', 'Quantidade'], ['valor_mpe', 'Valor'], ['participacao_mpe', '% do total']]} /><select aria-label="Anos anteriores" value={years} onChange={(e) => setYears(e.target.value)}>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} ano(s) atrás</option>)}</select></div>}>
       <Filters filters={filters} onChange={setFilters} />
       <p className="muted">Licitações já encerradas e liberadas para ME/EPP no mesmo período de cada ano, comparadas ao ano anterior.</p>
-      <Notice error={error} partial={data?.anos?.some((row) => row.amostra_limitada)} />
+      <Notice error={error} partial={data?.anos?.some((row) => row.amostra_limitada)} incomplete={data?.anos?.some((row) => !row.consulta_completa)} />
       {loading && !data ? <p className="empty">Carregando histórico…</p> : (
         <div className="years" style={{ opacity: loading ? 0.5 : 1 }}>
           {rows.map((row, index) => (
@@ -60,8 +60,7 @@ export default function Public() {
       <header className="page-head"><p className="eyebrow">VISÃO PÚBLICA · CEARÁ</p><h1>Licitações no {cityName ? cityName : 'Estado do Ceará'}</h1><p className="muted">Dados do PNCP atualizados em tempo real, restritos aos municípios cearenses.</p></header>
       <Card title="Filtros globais"><Filters filters={filters} onChange={setFilters} /></Card>
       {mpeOnly && <PriorityNotice />}
-      <Notice error={summary.error} partial={s?.amostra_limitada} />
-      {s && !s.consulta_completa && <div className="notice">Parte das consultas ao PNCP falhou; os números podem estar incompletos.</div>}
+      <Notice error={summary.error} partial={s?.amostra_limitada} incomplete={s && !s.consulta_completa} />
       <div className="stats">
         <Stat label={`Valor total estimado — ${scope}${mpeOnly ? ' (ME/EPP)' : ''}`} value={s ? brlCompact(s.valor_total) : ''} hint={s ? brl(s.valor_total) : ''} loading={summary.loading} tone="accent" />
         <Stat label={mpeOnly ? 'Licitações ME/EPP no período' : 'Licitações no período'} value={s ? num(s.quantidade_total) : ''} hint={`${range.inicio} a ${range.fim} · 2 cliques: ver abertas`} loading={summary.loading} onOpen={() => setShowOpen(true)} />
@@ -85,7 +84,7 @@ export default function Public() {
       </div>
       <MpeComparison initial={filters} />
       <Card title={`Editais abertos${mpeOnly ? ' para ME/EPP' : ''} — ${scope}`} aside={<span className="muted">{open.data ? `${num(open.data.total)} no total` : ''}</span>}>
-        <Notice error={open.error} />
+        <Notice error={open.error} partial={open.data?.amostra_limitada} incomplete={open.data && !open.data.consulta_completa} />
         <div className="notice-grid">{(open.data?.editais || []).map((item) => <NoticeCard key={item.id} item={item} showStatus={false} />)}</div>
         {open.data && !open.data.editais.length && <p className="empty">Nenhum edital aberto para este filtro.</p>}
       </Card>

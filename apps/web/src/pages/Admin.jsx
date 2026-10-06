@@ -88,7 +88,7 @@ function Flow({ token, onAuthError }) {
   return (
     <>
       <Card title="Fluxo de licitações do Ceará"><Filters filters={filters} onChange={setFilters} /></Card>
-      <Notice error={error} partial={data?.amostra_limitada} />
+      <Notice error={error} partial={data?.amostra_limitada} incomplete={data && !data.consulta_completa} />
       <div className="stats">
         <Stat label="Licitações" value={num(data?.quantidade_total)} loading={loading} tone="accent" />
         <Stat label="Municípios ativos" value={num(data?.por_municipio.length)} loading={loading} />

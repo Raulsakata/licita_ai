@@ -120,7 +120,7 @@ async def build_summary(start: date, end: date, municipality: str | None, modali
         "somente_mpe": only_mpe,
         "uf": licitacoes.UF, "municipio": municipality,
         "data_inicial": start.isoformat(), "data_final": end.isoformat(),
-        "consulta_completa": no_failures, "amostra_limitada": not sample_complete or only_mpe,
+        "consulta_completa": no_failures, "amostra_limitada": not sample_complete,
     }
 
 
@@ -136,7 +136,7 @@ async def public_summary(municipio: str | None = None, inicio: str | None = None
 @app.get("/api/publico/abertos")
 async def public_open_notices(municipio: str | None = None, todos: bool = False, somente_mpe: bool = False):
     try:
-        total, items = await licitacoes.fetch_open(
+        total, items, sample_complete, no_failures = await licitacoes.fetch_open(
             resolve_municipality(municipio), date.today(), 1000 if todos else 20, MAX_OPEN_PAGES if todos else 1,
         )
     except httpx.HTTPError as error:
@@ -144,7 +144,11 @@ async def public_open_notices(municipio: str | None = None, todos: bool = False,
     if somente_mpe:
         items = [item for item in items if licitacoes.has_me_epp_signal(item)]
         total = len(items)
-    return {"total": total, "somente_mpe": somente_mpe, "editais": [licitacoes.shape_item(item) for item in items]}
+    return {
+        "total": total, "somente_mpe": somente_mpe,
+        "consulta_completa": no_failures, "amostra_limitada": not sample_complete,
+        "editais": [licitacoes.shape_item(item) for item in items],
+    }
 
 
 @app.get("/api/publico/municipio/{codigo}/licitacoes")
@@ -152,7 +156,7 @@ async def municipality_notices(codigo: str, inicio: str | None = None, fim: str 
     municipality = resolve_municipality(codigo)
     start, end = resolve_period(inicio, fim)
     try:
-        (open_total, open_items), (closed_total, period_items, complete, ok) = await asyncio.gather(
+        (open_total, open_items, open_complete, open_ok), (closed_total, period_items, complete, ok) = await asyncio.gather(
             licitacoes.fetch_open(municipality, date.today(), 200, MAX_OPEN_PAGES),
             licitacoes.collect(start, end, municipality, pages=3),
         )
@@ -170,7 +174,7 @@ async def municipality_notices(codigo: str, inicio: str | None = None, fim: str 
         "municipio": municipality, "data_inicial": start.isoformat(), "data_final": end.isoformat(), "somente_mpe": True,
         "abertas_total": len(open_items), "abertas": [licitacoes.shape_item(item) for item in open_items],
         "encerradas_total": len(closed), "encerradas": [licitacoes.shape_item(item) for item in closed[:200]],
-        "consulta_completa": ok, "amostra_limitada": not complete,
+        "consulta_completa": ok and open_ok, "amostra_limitada": not complete or not open_complete,
     }
 
 

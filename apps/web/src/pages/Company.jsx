@@ -28,7 +28,7 @@ function Panel({ session, onLogout }) {
       </header>
       {!apt && <div className="notice restricted-banner" role="status"><b>Não Apta para editais com exigência de porte.</b> {company.motivo} Editais exclusivos para ME/EPP ficam bloqueados; você continua vendo os demais.</div>}
       <Card title="Refinar busca"><Filters filters={filters} onChange={setFilters} /></Card>
-      <Notice error={error} partial={data?.amostra_limitada} />
+      <Notice error={error} partial={data?.amostra_limitada} incomplete={data && !data.consulta_completa} />
       {data && !data.cnae_disponivel && <div className="notice error" role="alert">Não foi possível obter o CNAE da sua empresa. Sem ele não há como indicar licitações compatíveis; entre em contato com o administrador.</div>}
       {data?.cnae?.length > 0 && <div className="notice ok"><b>Filtro por CNAE:</b> exibindo apenas licitações cujo objeto cita termos de: {data.cnae.map((c) => c.descricao).join(' · ')}.</div>}
       <div className="stats">

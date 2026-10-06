@@ -6,10 +6,13 @@ export function Stat({ label, value, hint, tone, loading, onOpen }) {
   return <div className={`stat ${tone || ''} ${loading ? 'is-loading' : ''} ${onOpen ? 'clickable' : ''}`} {...interactive}><span>{label}</span><strong>{loading ? '…' : value}</strong>{hint && <small>{hint}</small>}</div>;
 }
 
-export function Notice({ error, partial }) {
-  if (error) return <div className="notice error" role="alert">{error}</div>;
-  if (partial) return <div className="notice">Dados do PNCP obtidos por amostragem: totais de quantidade são exatos; valores consideram os editais carregados.</div>;
-  return null;
+export function Notice({ error, partial, incomplete }) {
+  if (!error && !partial && !incomplete) return null;
+  return <>
+    {error && <div className="notice error" role="alert">{error}</div>}
+    {incomplete && <div className="notice error" role="status">O PNCP não carregou todas as páginas. Parte dos dados pode estar ausente; tente novamente mais tarde.</div>}
+    {partial && <div className="notice" role="status">Resultado parcial: a consulta atingiu o limite de páginas ou só parte dos registros foi carregada. Quantidades e valores exibidos podem não representar o total.</div>}
+  </>;
 }
 
 export function PriorityNotice() {

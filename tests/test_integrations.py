@@ -1,5 +1,6 @@
 ﻿import asyncio
 import unittest
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -159,6 +160,55 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         rows = licitacoes.closed_mpe_by_month(items)
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]["mes"], rows[0]["encerradas"], rows[0]["encerradas_mpe"], rows[0]["participacao_mpe"]), ("2020-03", 2, 1, 0.5))
+
+    async def test_open_notices_report_missing_pages(self):
+        first_page = {
+            "totalRegistros": 120, "totalPaginas": 3,
+            "data": [{"numeroControlePNCP": f"first-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(50)],
+        }
+        third_page = {
+            "data": [{"numeroControlePNCP": f"third-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(20)],
+        }
+
+        async def get_page(params):
+            if params["pagina"] == 1:
+                return first_page
+            if params["pagina"] == 2:
+                raise RuntimeError("PNCP indisponível")
+            return third_page
+
+        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=get_page)):
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6), 1000, 3)
+
+        self.assertEqual(total, 120)
+        self.assertEqual(len(items), 70)
+        self.assertFalse(complete)
+        self.assertFalse(no_failures)
+
+    async def test_open_notices_report_page_cap(self):
+        first_page = {
+            "totalRegistros": 120, "totalPaginas": 3,
+            "data": [{"numeroControlePNCP": f"first-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(50)],
+        }
+        second_page = {
+            "data": [{"numeroControlePNCP": f"second-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(50)],
+        }
+        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=[first_page, second_page])):
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6), 1000, 2)
+
+        self.assertEqual(total, 120)
+        self.assertEqual(len(items), 100)
+        self.assertFalse(complete)
+        self.assertTrue(no_failures)
+
+    async def test_public_open_route_exposes_partial_status(self):
+        item = {"numeroControlePNCP": "ce-1", "unidadeOrgao": {"ufSigla": "CE"}}
+        with patch.object(licitacoes, "fetch_open", AsyncMock(return_value=(120, [item], False, False))):
+            response = await api.public_open_notices(todos=True)
+
+        self.assertEqual(response["total"], 120)
+        self.assertTrue(response["amostra_limitada"])
+        self.assertFalse(response["consulta_completa"])
 
 
 if __name__ == "__main__":

@@ -73,7 +73,7 @@ export function MunicipalityPanel({ code, name, onClose }) {
         <PriorityNotice />
         <p className="muted">Abertas: vigentes hoje. Encerradas: com prazo de propostas já vencido, dentro do período selecionado.</p>
         <Filters filters={filters} onChange={setFilters} hideCity />
-        <Notice error={error} partial={data?.amostra_limitada} />
+        <Notice error={error} partial={data?.amostra_limitada} incomplete={data && !data.consulta_completa} />
         <div className="row-gap">
           <Tabs value={tab} onChange={setTab} options={[['abertas', `Abertas (${data ? num(data.abertas_total) : '…'})`], ['encerradas', `Encerradas (${data ? num(data.encerradas_total) : '…'})`]]} />
           <input className="search" type="search" placeholder="Buscar por objeto ou órgão…" value={text} onChange={(e) => setText(e.target.value)} />
@@ -98,7 +98,7 @@ export function OpenNoticesDialog({ municipio, scope, mpeOnly, onClose }) {
         <input className="search" type="search" autoFocus placeholder="Buscar por objeto, órgão ou município…" value={text} onChange={(e) => setText(e.target.value)} />
         {mpeOnly && <PriorityNotice />}
         <p className="muted" aria-live="polite">{loading ? 'Carregando todas as licitações abertas…' : `${num(list.length)} exibida(s) de ${num(data?.total)} abertas no total`}</p>
-        <Notice error={error} />
+        <Notice error={error} partial={data?.amostra_limitada} incomplete={data && !data.consulta_completa} />
         <div className="notice-grid">{list.map((item) => <NoticeCard key={item.id} item={item} showStatus={false} />)}</div>
       </div>
     </div>
