@@ -11,7 +11,7 @@ from src.db import (
     upsert_company_fields,
 )
 from src.domain import PNCP_MODALIDADES
-from src.extract import get_ibge_state_municipalities, get_open_cnpj
+from src.extract import get_ibge_state_mesh, get_ibge_state_municipalities, get_open_cnpj
 from src.mappers import normalize_company
 from src.schemas import AdminLogin, CompanyCreate, CompanyLogin, CompanyUpdate, SavedSearchCreate
 from src.transform import assess_eligibility
@@ -19,6 +19,7 @@ from src.validators import validate_cnpj
 
 MODALIDADE_CODES = {item["codigo"] for item in PNCP_MODALIDADES}
 PUBLIC_COMPANY_KEYS = COMPANY_PUBLIC_COLUMNS.split(",")
+MAX_OPEN_PAGES = 10
 
 app = FastAPI(title="Licita AI API", version="0.3.0")
 app.add_middleware(
@@ -98,6 +99,14 @@ async def ceara_municipalities():
         raise HTTPException(502, "Falha ao consultar o IBGE") from error
 
 
+@app.get("/api/geografia/mapa")
+async def ceara_map():
+    try:
+        return await get_ibge_state_mesh(int(licitacoes.IBGE_UF_CODE))
+    except httpx.HTTPError as error:
+        raise HTTPException(502, "Falha ao consultar o IBGE") from error
+
+
 # ---------- Perfil 1: público ----------
 
 async def build_summary(start: date, end: date, municipality: str | None, modalities=licitacoes.DEFAULT_MODALITIES, persist: bool = True) -> dict:
@@ -122,12 +131,37 @@ async def public_summary(municipio: str | None = None, inicio: str | None = None
 
 
 @app.get("/api/publico/abertos")
-async def public_open_notices(municipio: str | None = None):
+async def public_open_notices(municipio: str | None = None, todos: bool = False):
     try:
-        total, items = await licitacoes.fetch_open(resolve_municipality(municipio), date.today(), 20)
+        total, items = await licitacoes.fetch_open(
+            resolve_municipality(municipio), date.today(), 1000 if todos else 20, MAX_OPEN_PAGES if todos else 1,
+        )
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
     return {"total": total, "editais": [licitacoes.shape_item(item) for item in items]}
+
+
+@app.get("/api/publico/municipio/{codigo}/licitacoes")
+async def municipality_notices(codigo: str, inicio: str | None = None, fim: str | None = None):
+    municipality = resolve_municipality(codigo)
+    start, end = resolve_period(inicio, fim)
+    try:
+        (open_total, open_items), (closed_total, period_items, complete, ok) = await asyncio.gather(
+            licitacoes.fetch_open(municipality, date.today(), 200, MAX_OPEN_PAGES),
+            licitacoes.collect(start, end, municipality, pages=3),
+        )
+    except httpx.HTTPError as error:
+        raise HTTPException(502, "Falha ao consultar o PNCP") from error
+    now = datetime.now().isoformat()
+    open_ids = {item.get("numeroControlePNCP") for item in open_items}
+    closed = [item for item in period_items if item.get("numeroControlePNCP") not in open_ids and str(item.get("dataEncerramentoProposta") or "") < now]
+    closed.sort(key=lambda item: str(item.get("dataEncerramentoProposta") or ""), reverse=True)
+    return {
+        "municipio": municipality, "data_inicial": start.isoformat(), "data_final": end.isoformat(),
+        "abertas_total": open_total, "abertas": [licitacoes.shape_item(item) for item in open_items],
+        "encerradas_total": len(closed), "encerradas": [licitacoes.shape_item(item) for item in closed[:200]],
+        "consulta_completa": ok, "amostra_limitada": not complete,
+    }
 
 
 @app.get("/api/publico/comparativo-mpe")

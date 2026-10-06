@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { brl, brlCompact, num, useFetch } from '../lib/api';
 
-export function Stat({ label, value, hint, tone, loading }) {
-  return <div className={`stat ${tone || ''} ${loading ? 'is-loading' : ''}`}><span>{label}</span><strong>{loading ? '…' : value}</strong>{hint && <small>{hint}</small>}</div>;
+export function Stat({ label, value, hint, tone, loading, onOpen }) {
+  const interactive = onOpen ? { onDoubleClick: onOpen, onKeyDown: (e) => { if (e.key === 'Enter') onOpen(); }, tabIndex: 0, role: 'button', title: 'Clique duas vezes (ou Enter) para ver as licitações abertas' } : {};
+  return <div className={`stat ${tone || ''} ${loading ? 'is-loading' : ''} ${onOpen ? 'clickable' : ''}`} {...interactive}><span>{label}</span><strong>{loading ? '…' : value}</strong>{hint && <small>{hint}</small>}</div>;
 }
 
 export function Notice({ error, partial }) {
@@ -33,19 +34,19 @@ export function toRange(filters) {
   return { inicio: filters.inicio, fim: filters.fim };
 }
 
-export function Filters({ filters, onChange }) {
-  const { data: cities } = useFetch('/api/geografia/municipios', {});
+export function Filters({ filters, onChange, hideCity = false }) {
+  const { data: cities } = useFetch('/api/geografia/municipios', {}, { enabled: !hideCity });
   const set = (patch) => onChange({ ...filters, ...patch });
   const years = Array.from({ length: 6 }, (_, i) => String(currentYear - i));
   const presets = [['30 dias', 30], ['90 dias', 90], ['6 meses', 180]];
   return (
     <div className="filters" role="search">
-      <label>Município (CE)
+      {!hideCity && <label>Município (CE)
         <select value={filters.municipio} onChange={(e) => set({ municipio: e.target.value })}>
           <option value="">Todo o Ceará</option>
           {(cities || []).map((city) => <option key={city.id} value={city.id}>{city.nome}</option>)}
         </select>
-      </label>
+      </label>}
       <label>Período por
         <select value={filters.modo} onChange={(e) => set({ modo: e.target.value })}><option value="datas">Datas</option><option value="ano">Ano</option></select>
       </label>

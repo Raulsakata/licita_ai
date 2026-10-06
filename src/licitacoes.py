@@ -148,10 +148,24 @@ def summarize(items: list[dict], reported_total: int) -> dict:
     }
 
 
-async def fetch_open(municipality: str | None, today: date, limit: int = 50):
-    params = {"dataFinal": today.strftime("%Y%m%d"), "pagina": 1, "tamanhoPagina": PAGE_SIZE}
-    params.update({"codigoMunicipioIbge": municipality} if municipality else {"uf": UF})
-    response = await get_pncp_proposals(params)
-    items = [item for item in response.get("data") or [] if is_ceara(item)]
-    items.sort(key=lambda item: str(item.get("dataEncerramentoProposta") or ""))
-    return int(response.get("totalRegistros") or len(items)), items[:limit]
+async def fetch_open(municipality: str | None, today: date, limit: int = 50, pages: int = 1):
+    base = {"dataFinal": today.strftime("%Y%m%d"), "tamanhoPagina": PAGE_SIZE}
+    base.update({"codigoMunicipioIbge": municipality} if municipality else {"uf": UF})
+    response = await get_pncp_proposals({**base, "pagina": 1})
+    raw = list(response.get("data") or [])
+    total = int(response.get("totalRegistros") or len(raw))
+    last_page = min(int(response.get("totalPaginas") or 1), pages)
+    if last_page > 1:
+        semaphore = asyncio.Semaphore(4)
+
+        async def page(number: int):
+            async with semaphore:
+                return await get_pncp_proposals({**base, "pagina": number})
+
+        rest = await asyncio.gather(*(page(n) for n in range(2, last_page + 1)), return_exceptions=True)
+        for extra in rest:
+            if not isinstance(extra, Exception):
+                raw.extend(extra.get("data") or [])
+    unique = {item.get("numeroControlePNCP"): item for item in raw if is_ceara(item) and item.get("numeroControlePNCP")}
+    items = sorted(unique.values(), key=lambda item: str(item.get("dataEncerramentoProposta") or ""))
+    return total, items[:limit]

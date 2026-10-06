@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { brl, brlCompact, num, pct, useFetch } from '../lib/api';
 import { BarList, Card, CityTable, ColumnChart, Filters, Notice, NoticeCard, Stat, Tabs, defaultFilters, toRange } from '../components/ui';
+import { CearaMap, MunicipalityPanel, OpenNoticesDialog } from '../components/map';
 
 function MpeComparison({ params }) {
   const [metric, setMetric] = useState('quantidade_mpe');
@@ -32,6 +33,8 @@ function MpeComparison({ params }) {
 
 export default function Public() {
   const [filters, setFilters] = useState(defaultFilters());
+  const [showOpen, setShowOpen] = useState(false);
+  const [mapCity, setMapCity] = useState(null);
   const range = toRange(filters);
   const params = { municipio: filters.municipio, ...range };
   const summary = useFetch('/api/publico/resumo', params);
@@ -50,12 +53,15 @@ export default function Public() {
       {s && !s.consulta_completa && <div className="notice">Parte das consultas ao PNCP falhou; os números podem estar incompletos.</div>}
       <div className="stats">
         <Stat label={`Valor total estimado — ${scope}`} value={s ? brlCompact(s.valor_total) : ''} hint={s ? brl(s.valor_total) : ''} loading={summary.loading} tone="accent" />
-        <Stat label="Licitações no período" value={s ? num(s.quantidade_total) : ''} hint={`${range.inicio} a ${range.fim}`} loading={summary.loading} />
+        <Stat label="Licitações no período" value={s ? num(s.quantidade_total) : ''} hint={`${range.inicio} a ${range.fim} · 2 cliques: ver abertas`} loading={summary.loading} onOpen={() => setShowOpen(true)} />
         <Stat label={cityName ? `Licitações em ${cityName}` : 'Municípios com licitações'} value={s ? (cityName ? num(s.quantidade_total) : num(s.por_municipio.length)) : ''} loading={summary.loading} />
         <Stat label="Editais abertos para propostas" value={open.data ? num(open.data.total) : ''} loading={open.loading} tone="good" />
         <Stat label="Valor médio por licitação" value={s ? brlCompact(s.valor_medio) : ''} loading={summary.loading} />
         <Stat label="Com sinal ME/EPP" value={s ? num(s.quantidade_mpe) : ''} hint="identificados por texto do edital" loading={summary.loading} />
       </div>
+      <CearaMap summary={s} selected={mapCity?.code} onSelect={(code, name) => setMapCity({ code, name })} />
+      {mapCity && <MunicipalityPanel key={mapCity.code} code={mapCity.code} name={mapCity.name} onClose={() => setMapCity(null)} />}
+      {showOpen && <OpenNoticesDialog municipio={filters.municipio} scope={scope} onClose={() => setShowOpen(false)} />}
       <div className="grid-2">
         <Card title="Evolução mensal">{s ? <ColumnChart rows={s.por_mes} labelKey="mes" title="Publicações por mês" /> : <p className="empty">{summary.loading ? 'Carregando…' : 'Sem dados.'}</p>}</Card>
         <Card title="Modalidades">{s ? <BarList rows={s.por_modalidade} labelKey="modalidade" /> : <p className="empty">Carregando…</p>}</Card>

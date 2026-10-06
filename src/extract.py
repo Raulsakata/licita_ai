@@ -83,6 +83,14 @@ async def get_ibge_state_municipalities(state_id: int) -> list[dict]:
     )
 
 
+async def get_ibge_state_mesh(state_id: int) -> dict:
+    return await _get_json(
+        f"https://servicodados.ibge.gov.br/api/v3/malhas/estados/{state_id}",
+        {"intrarregiao": "municipio", "formato": "application/vnd.geo+json", "qualidade": "minima"},
+        settings.ibge_cache_ttl_seconds,
+    )
+
+
 async def get_ibge_regions() -> list[dict]:
     return await _get_json(
         f"{settings.ibge_base_url}/regioes", {"orderBy": "nome"},
