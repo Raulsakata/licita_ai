@@ -1,6 +1,6 @@
 ﻿import asyncio
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10,10 +10,11 @@ import src.api as api
 import src.auth as auth
 import src.cnae as cnae
 import src.licitacoes as licitacoes
+import src.pncp_sync as pncp_sync
 import src.db as db
 import src.extract as extract
 from src.schemas import Eligibility
-from src.transform import assess_eligibility
+from src.transform import assess_eligibility, normalize_opportunity
 
 
 class FakeResponse:
@@ -131,13 +132,105 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         }
         foreign = {**item, "numeroControlePNCP": "2-2-2", "unidadeOrgao": {"ufSigla": "BA", "municipioNome": "Salvador"}}
         pncp = AsyncMock(return_value={"totalRegistros": 2, "totalPaginas": 1, "data": [item, foreign]})
-        with patch.object(licitacoes, "get_pncp_contracts", pncp), patch.object(api, "save_pncp_results", MagicMock()):
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=None)), patch.object(licitacoes, "get_pncp_contracts", pncp):
             summary = await api.public_summary(None, "2026-09-01", "2026-09-30")
         params = [call.args[0] for call in pncp.await_args_list]
         self.assertTrue(all(p["uf"] == "CE" for p in params))
         self.assertEqual(summary["quantidade_amostra"], 1)
         self.assertEqual(summary["valor_total"], 1250)
         self.assertEqual(summary["por_municipio"][0]["municipio"], "Fortaleza")
+
+    def test_sync_missing_ranges_only_returns_uncovered_dates(self):
+        windows = [
+            {"starts_on": "2026-09-01", "ends_on": "2026-09-05"},
+            {"starts_on": "2026-09-09", "ends_on": "2026-09-12"},
+        ]
+        self.assertEqual(
+            pncp_sync._missing_ranges(date(2026, 9, 1), date(2026, 9, 15), windows),
+            [(date(2026, 9, 6), date(2026, 9, 8)), (date(2026, 9, 13), date(2026, 9, 15))],
+        )
+
+    def test_naive_pncp_deadline_is_treated_as_ceara_local_time(self):
+        value = db.normalize_pncp_timestamp("2026-10-06T18:00:00")
+        self.assertEqual(value, "2026-10-06T21:00:00+00:00")
+
+    async def test_covered_sync_period_reads_supabase_without_calling_pncp(self):
+        item = {
+            "numeroControlePNCP": "cached-1", "modalidadeId": 6,
+            "unidadeOrgao": {"ufSigla": "CE", "codigoIbge": "2304400"},
+        }
+        windows = [{"modality_code": 6, "starts_on": "2026-09-01", "ends_on": "2026-09-30"}]
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=object())), patch.object(
+            pncp_sync, "list_pncp_sync_windows", MagicMock(return_value=windows),
+        ), patch.object(pncp_sync, "load_pncp_results", MagicMock(return_value=[{"pncp_id": "cached-1", "raw_data": item}])), patch.object(
+            pncp_sync.licitacoes, "get_pncp_contracts", AsyncMock(),
+        ) as pncp:
+            total, items, complete, no_failures = await pncp_sync.collect(
+                date(2026, 9, 1), date(2026, 9, 30), modalities=(6,),
+            )
+
+        self.assertEqual((total, len(items)), (1, 1))
+        self.assertTrue(complete)
+        self.assertTrue(no_failures)
+        pncp.assert_not_awaited()
+
+    async def test_sync_fetches_and_persists_only_uncovered_range(self):
+        item = {
+            "numeroControlePNCP": "fresh-1", "modalidadeId": 6,
+            "unidadeOrgao": {"ufSigla": "CE", "codigoIbge": "2304400"},
+        }
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=object())), patch.object(
+            pncp_sync, "list_pncp_sync_windows", MagicMock(return_value=[]),
+        ), patch.object(pncp_sync, "load_pncp_results", MagicMock(return_value=[{"pncp_id": "fresh-1", "raw_data": item}])), patch.object(
+            pncp_sync, "save_pncp_results", MagicMock(return_value=True),
+        ) as save_rows, patch.object(
+            pncp_sync, "save_pncp_sync_window", MagicMock(return_value=True),
+        ) as save_window, patch.object(
+            pncp_sync.licitacoes, "_fetch_modality", AsyncMock(return_value=(1, [item], True, True)),
+        ) as fetch_modality:
+            total, items, complete, no_failures = await pncp_sync.collect(
+                date(2026, 9, 1), date(2026, 9, 30), modalities=(6,),
+            )
+
+        fetch_modality.assert_awaited_once()
+        save_rows.assert_called_once_with({"data": [item]})
+        save_window.assert_called_once_with(6, date(2026, 9, 1), date(2026, 9, 30), 1, 1)
+        self.assertEqual((total, len(items)), (1, 1))
+        self.assertTrue(complete)
+        self.assertTrue(no_failures)
+
+    async def test_scheduler_waits_twelve_hours_between_runs(self):
+        started = (datetime.now(timezone.utc) - timedelta(hours=11)).isoformat()
+        state = {"last_started_at": started, "last_completed_at": started}
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=object())), patch.object(
+            pncp_sync, "get_pncp_sync_state", MagicMock(return_value=state),
+        ), patch.object(pncp_sync, "collect", AsyncMock()) as collect, patch.object(
+            pncp_sync, "fetch_open_cached", AsyncMock(),
+        ) as open_fetch:
+            result = await pncp_sync.run_scheduled_sync()
+
+        self.assertEqual(result["status"], "not_due")
+        collect.assert_not_awaited()
+        open_fetch.assert_not_awaited()
+
+    async def test_scheduler_refreshes_recent_period_when_due(self):
+        started = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+        state = {"last_started_at": started, "last_completed_at": started}
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=object())), patch.object(
+            pncp_sync, "get_pncp_sync_state", MagicMock(return_value=state),
+        ), patch.object(pncp_sync, "update_pncp_sync_state", MagicMock()), patch.object(
+            pncp_sync, "collect", AsyncMock(return_value=(1, [{"id": "cached"}], True, True)),
+        ) as collect, patch.object(
+            pncp_sync, "fetch_open_cached", AsyncMock(return_value=(1, [], True, True)),
+        ) as open_fetch:
+            result = await pncp_sync.run_scheduled_sync()
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(collect.await_args.kwargs, {"force_refresh": True})
+        open_fetch.assert_awaited_once_with(None, date.today(), force_refresh=True)
+        self.assertEqual((collect.await_args.args[0], collect.await_args.args[1]), (
+            date.today() - timedelta(days=pncp_sync.REFRESH_LOOKBACK_DAYS), date.today(),
+        ))
 
     def test_rejects_other_states_and_bad_periods(self):
         with self.assertRaises(HTTPException):
@@ -151,6 +244,14 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(assess_eligibility({**base, "porte": "ME"}).rotulo, "Apta")
         self.assertEqual(assess_eligibility({**base, "porte": "Demais"}).rotulo, "Não Apta")
         self.assertEqual(assess_eligibility({**base, "porte": "ME", "natureza_juridica_codigo": "1015"}).rotulo, "Não Apta")
+
+    def test_cached_opportunity_infers_ceara_uf_from_ibge_code(self):
+        row = normalize_opportunity({
+            "numeroControlePNCP": "ibge-only-1",
+            "codigoMunicipioIbge": "2304400",
+            "dataPublicacaoPncp": "2026-10-06T12:00:00",
+        }, None)
+        self.assertEqual(row["uf"], "CE")
 
     def test_tokens_and_passwords(self):
         stored = auth.hash_password("senha-forte-123")
@@ -169,7 +270,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         unrelated = {"numeroControlePNCP": "3-3-3", "objetoCompra": "Aquisição de material de escritório", "unidadeOrgao": {"ufSigla": "CE"}}
         restricted = {"numeroControlePNCP": "2-2-2", "objetoCompra": "Gás - exclusiva para ME e EPP", "unidadeOrgao": {"ufSigla": "CE"}}
         pncp = AsyncMock(return_value={"totalRegistros": 3, "totalPaginas": 1, "data": [open_item, restricted, unrelated]})
-        with patch.object(api, "get_company", MagicMock(return_value=row)), patch.object(licitacoes, "get_pncp_contracts", pncp):
+        with patch.object(api, "get_company", MagicMock(return_value=row)), patch.object(pncp_sync, "get_db", MagicMock(return_value=None)), patch.object(licitacoes, "get_pncp_contracts", pncp):
             result = await api.company_opportunities(None, "2026-09-01", "2026-09-30", 6, {"sub": row["cnpj"], "role": "empresa"})
         self.assertEqual([i["id"] for i in result["aptas"]], ["1-1-1"])
         self.assertEqual(result["total_incompativeis"], 1)
@@ -368,7 +469,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_open_route_exposes_partial_status(self):
         item = {"numeroControlePNCP": "ce-1", "unidadeOrgao": {"ufSigla": "CE"}}
-        with patch.object(licitacoes, "fetch_open", AsyncMock(return_value=(120, [item], False, False))):
+        with patch.object(pncp_sync, "fetch_open_cached", AsyncMock(return_value=(120, [item], False, False))):
             response = await api.public_open_notices(todos=True)
 
         self.assertEqual(response["total"], 120)
@@ -376,7 +477,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response["consulta_completa"])
 
     async def test_public_open_route_reports_exhausted_page_retries(self):
-        with patch.object(licitacoes, "fetch_open", AsyncMock(side_effect=RuntimeError("Página incompleta"))):
+        with patch.object(pncp_sync, "fetch_open_cached", AsyncMock(side_effect=RuntimeError("Página incompleta"))):
             with self.assertRaises(HTTPException) as raised:
                 await api.public_open_notices()
 
@@ -384,7 +485,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("todas as páginas", raised.exception.detail)
 
     async def test_municipality_route_reports_exhausted_open_page_retries(self):
-        with patch.object(licitacoes, "fetch_open", AsyncMock(side_effect=RuntimeError("Página incompleta"))), patch.object(
+        with patch.object(pncp_sync, "fetch_open_cached", AsyncMock(side_effect=RuntimeError("Página incompleta"))), patch.object(
             licitacoes, "collect", AsyncMock(return_value=(0, [], True, True)),
         ):
             with self.assertRaises(HTTPException) as raised:
@@ -392,6 +493,58 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.status_code, 502)
         self.assertIn("todas as páginas", raised.exception.detail)
+
+    async def test_open_snapshot_is_served_from_database_until_due(self):
+        item = {"numeroControlePNCP": "open-1", "unidadeOrgao": {"ufSigla": "CE"}}
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=object())), patch.object(
+            pncp_sync, "get_pncp_open_sync_state", MagicMock(return_value={"status": "complete", "last_started_at": recent}),
+        ), patch.object(
+            pncp_sync, "load_pncp_open_snapshot", MagicMock(return_value=[{"raw_data": item}]),
+        ), patch.object(pncp_sync.licitacoes, "fetch_open", AsyncMock()) as fetch:
+            total, items, complete, no_failures = await pncp_sync.fetch_open_cached(None, date.today())
+
+        self.assertEqual((total, len(items)), (1, 1))
+        self.assertTrue(complete)
+        self.assertTrue(no_failures)
+        fetch.assert_not_awaited()
+
+    async def test_open_snapshot_refreshes_after_twelve_hours(self):
+        item = {"numeroControlePNCP": "open-1", "unidadeOrgao": {"ufSigla": "CE"}}
+        stale = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=object())), patch.object(
+            pncp_sync, "get_pncp_open_sync_state", MagicMock(return_value={"status": "complete", "last_started_at": stale}),
+        ), patch.object(
+            pncp_sync, "update_pncp_open_sync_state", MagicMock(),
+        ), patch.object(
+            pncp_sync.licitacoes, "fetch_open", AsyncMock(return_value=(1, [item], True, True)),
+        ) as fetch, patch.object(
+            pncp_sync, "save_pncp_open_snapshot", MagicMock(return_value=True),
+        ), patch.object(
+            pncp_sync, "load_pncp_open_snapshot", MagicMock(return_value=[{"raw_data": item}]),
+        ):
+            total, items, complete, no_failures = await pncp_sync.fetch_open_cached(None, date.today())
+
+        fetch.assert_awaited_once()
+        self.assertEqual((total, len(items)), (1, 1))
+        self.assertTrue(complete)
+        self.assertTrue(no_failures)
+
+    async def test_failed_open_snapshot_refresh_serves_still_valid_cached_notices(self):
+        item = {"numeroControlePNCP": "open-cached", "unidadeOrgao": {"ufSigla": "CE"}}
+        stale = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=object())), patch.object(
+            pncp_sync, "get_pncp_open_sync_state", MagicMock(return_value={"status": "complete", "last_started_at": stale}),
+        ), patch.object(pncp_sync, "update_pncp_open_sync_state", MagicMock()), patch.object(
+            pncp_sync.licitacoes, "fetch_open", AsyncMock(side_effect=RuntimeError("PNCP indisponível")),
+        ), patch.object(
+            pncp_sync, "load_pncp_open_snapshot", MagicMock(return_value=[{"raw_data": item}]),
+        ):
+            total, items, complete, no_failures = await pncp_sync.fetch_open_cached(None, date.today())
+
+        self.assertEqual((total, items), (1, [item]))
+        self.assertFalse(complete)
+        self.assertFalse(no_failures)
 
 
 if __name__ == "__main__":

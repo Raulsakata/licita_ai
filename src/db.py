@@ -1,5 +1,5 @@
 from collections import deque
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from postgrest import CountMethod
 from postgrest.exceptions import APIError
@@ -32,18 +32,22 @@ def save_company(company: dict, eligibility: dict) -> None:
         logger.warning("Falha ao salvar empresa/avaliacao no Supabase: %s", error)
 
 
-def save_pncp_results(payload: dict, municipality_code: str | None = None) -> None:
+def save_pncp_results(payload: dict, municipality_code: str | None = None) -> bool:
     db = get_db()
     if not db:
-        return
+        return False
     from src.transform import normalize_opportunity
     rows = [row for item in payload.get("data", []) if (row := normalize_opportunity(item, municipality_code))]
     if not rows:
-        return
+        return True
     try:
-        db.schema("licita_ai").table("pncp_opportunities").upsert(rows, on_conflict="pncp_id").execute()
+        table = db.schema("licita_ai").table("pncp_opportunities")
+        for offset in range(0, len(rows), 250):
+            table.upsert(rows[offset:offset + 250], on_conflict="pncp_id").execute()
+        return True
     except APIError as error:
         logger.warning("Falha ao salvar oportunidades PNCP no Supabase: %s", error)
+        return False
 
 
 def list_saved_searches() -> list[dict]:
@@ -184,3 +188,176 @@ def list_logs(limit: int = 200, level: str | None = None) -> list[dict]:
             logger.warning("Falha ao listar logs no Supabase: %s", error)
     logs = [entry for entry in SYSTEM_LOGS if not level or entry["level"] == level]
     return logs[:limit]
+
+
+def load_pncp_results(start: date, end: date, municipality_code: str | None = None) -> list[dict] | None:
+    table = _table("pncp_opportunities")
+    if table is None:
+        return None
+    try:
+        rows = []
+        offset = 0
+        page_size = 1000
+        end_exclusive = (end + timedelta(days=1)).isoformat()
+        while True:
+            query = table.select("pncp_id,municipality_ibge_code,uf,publication_date,raw_data")
+            query = query.gte("publication_date", start.isoformat()).lt("publication_date", end_exclusive)
+            query = query.eq("uf", "CE")
+            if municipality_code:
+                query = query.eq("municipality_ibge_code", municipality_code)
+            page = query.order("publication_date").range(offset, offset + page_size - 1).execute().data or []
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+            offset += page_size
+    except APIError as error:
+        logger.warning("Falha ao carregar oportunidades PNCP do Supabase: %s", error)
+        return None
+
+
+def list_pncp_sync_windows(modalities: list[int]) -> list[dict] | None:
+    table = _table("pncp_sync_windows")
+    if table is None:
+        return None
+    try:
+        return table.select("modality_code,starts_on,ends_on,fetched_at,total_records,stored_records").in_("modality_code", modalities).execute().data or []
+    except APIError as error:
+        logger.warning("Falha ao consultar janelas de sincronização PNCP: %s", error)
+        return None
+
+
+def save_pncp_sync_window(modality: int, start: date, end: date, total: int, stored: int) -> bool:
+    table = _table("pncp_sync_windows")
+    if table is None:
+        return False
+    try:
+        table.upsert({
+            "modality_code": modality, "starts_on": start.isoformat(), "ends_on": end.isoformat(),
+            "total_records": total, "stored_records": stored, "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="modality_code,starts_on,ends_on").execute()
+        return True
+    except APIError as error:
+        logger.warning("Falha ao gravar janela de sincronização PNCP: %s", error)
+        return False
+
+
+def get_pncp_sync_state() -> dict | None:
+    table = _table("pncp_sync_state")
+    if table is None:
+        return None
+    try:
+        result = table.select("status,last_started_at,last_completed_at,last_error,updated_at").eq("singleton", True).limit(1).execute()
+        return result.data[0] if result.data else None
+    except APIError as error:
+        logger.warning("Falha ao consultar estado do sincronizador PNCP: %s", error)
+        return None
+
+
+def update_pncp_sync_state(status: str, started_at: str | None = None, completed_at: str | None = None, error: str | None = None) -> bool:
+    table = _table("pncp_sync_state")
+    if table is None:
+        return False
+    try:
+        existing = get_pncp_sync_state() or {}
+        table.upsert({
+            "singleton": True,
+            "status": status,
+            "last_started_at": started_at or existing.get("last_started_at"),
+            "last_completed_at": completed_at or existing.get("last_completed_at"),
+            "last_error": error[:500] if error else None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="singleton").execute()
+        return True
+    except APIError as error:
+        logger.warning("Falha ao atualizar estado do sincronizador PNCP: %s", error)
+        return False
+
+
+def save_pncp_open_snapshot(items: list[dict]) -> bool:
+    table = _table("pncp_open_opportunities")
+    if table is None:
+        return False
+    from src.licitacoes import is_ceara
+    rows = []
+    for item in items:
+        if not is_ceara(item) or not item.get("numeroControlePNCP"):
+            continue
+        unit = item.get("unidadeOrgao") or {}
+        municipality_code = unit.get("codigoIbge") or item.get("codigoMunicipioIbge")
+        rows.append({
+            "pncp_id": str(item["numeroControlePNCP"]),
+            "municipality_ibge_code": municipality_code,
+            "uf": "CE",
+            "proposal_end": normalize_pncp_timestamp(item.get("dataEncerramentoProposta")),
+            "raw_data": item,
+        })
+    try:
+        for offset in range(0, len(rows), 250):
+            table.upsert(rows[offset:offset + 250], on_conflict="pncp_id").execute()
+        return True
+    except APIError as error:
+        logger.warning("Falha ao salvar snapshot de editais abertos no Supabase: %s", error)
+        return False
+
+
+def normalize_pncp_timestamp(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=-3)))
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def load_pncp_open_snapshot(municipality_code: str | None = None) -> list[dict] | None:
+    table = _table("pncp_open_opportunities")
+    if table is None:
+        return None
+    try:
+        rows, offset, page_size = [], 0, 1000
+        now = datetime.now(timezone.utc).isoformat()
+        while True:
+            query = table.select("pncp_id,municipality_ibge_code,proposal_end,raw_data").eq("uf", "CE").gt("proposal_end", now)
+            if municipality_code:
+                query = query.eq("municipality_ibge_code", municipality_code)
+            page = query.order("proposal_end").range(offset, offset + page_size - 1).execute().data or []
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+            offset += page_size
+    except APIError as error:
+        logger.warning("Falha ao carregar snapshot de editais abertos: %s", error)
+        return None
+
+
+def get_pncp_open_sync_state() -> dict | None:
+    table = _table("pncp_open_sync_state")
+    if table is None:
+        return None
+    try:
+        result = table.select("status,last_started_at,last_completed_at,total_records,last_error,updated_at").eq("singleton", True).limit(1).execute()
+        return result.data[0] if result.data else None
+    except APIError as error:
+        logger.warning("Falha ao consultar estado de editais abertos: %s", error)
+        return None
+
+
+def update_pncp_open_sync_state(status: str, started_at: str | None = None, completed_at: str | None = None, total_records: int | None = None, error: str | None = None) -> bool:
+    table = _table("pncp_open_sync_state")
+    if table is None:
+        return False
+    try:
+        existing = get_pncp_open_sync_state() or {}
+        table.upsert({
+            "singleton": True,
+            "status": status,
+            "last_started_at": started_at or existing.get("last_started_at"),
+            "last_completed_at": completed_at or existing.get("last_completed_at"),
+            "total_records": total_records if total_records is not None else existing.get("total_records", 0),
+            "last_error": error[:500] if error else None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="singleton").execute()
+        return True
+    except APIError as error:
+        logger.warning("Falha ao atualizar estado de editais abertos: %s", error)
+        return False

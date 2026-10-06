@@ -3,11 +3,11 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from src import auth, cnae, licitacoes
+from src import auth, cnae, licitacoes, pncp_sync
 from src.config import settings
 from src.db import (
     COMPANY_PUBLIC_COLUMNS, count_rows, create_saved_search, delete_company, delete_saved_search, get_company, get_db,
-    list_companies, list_logs, list_saved_searches, log_event, save_company, save_pncp_results, update_company,
+    list_companies, list_logs, list_saved_searches, log_event, save_company, update_company,
     upsert_company_fields,
 )
 from src.domain import PNCP_MODALIDADES
@@ -19,12 +19,32 @@ from src.validators import validate_cnpj
 
 MODALIDADE_CODES = {item["codigo"] for item in PNCP_MODALIDADES}
 PUBLIC_COMPANY_KEYS = COMPANY_PUBLIC_COLUMNS.split(",")
+_pncp_scheduler_task: asyncio.Task | None = None
 
 app = FastAPI(title="Licita AI API", version="0.3.0")
 app.add_middleware(
     CORSMiddleware, allow_origins=[origin.strip() for origin in settings.frontend_origin.split(",")],
     allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def start_pncp_scheduler():
+    global _pncp_scheduler_task
+    if get_db() and (_pncp_scheduler_task is None or _pncp_scheduler_task.done()):
+        _pncp_scheduler_task = asyncio.create_task(pncp_sync.scheduler_loop())
+
+
+@app.on_event("shutdown")
+async def stop_pncp_scheduler():
+    global _pncp_scheduler_task
+    if _pncp_scheduler_task and not _pncp_scheduler_task.done():
+        _pncp_scheduler_task.cancel()
+        try:
+            await _pncp_scheduler_task
+        except asyncio.CancelledError:
+            pass
+    _pncp_scheduler_task = None
 
 
 def resolve_period(inicio: str | None, fim: str | None) -> tuple[date, date]:
@@ -108,10 +128,8 @@ async def ceara_map():
 
 # ---------- Perfil 1: público ----------
 
-async def build_summary(start: date, end: date, municipality: str | None, modalities=licitacoes.DEFAULT_MODALITIES, persist: bool = True, only_mpe: bool = False) -> dict:
-    total, items, sample_complete, no_failures = await licitacoes.collect(start, end, municipality, modalities)
-    if persist and items:
-        await asyncio.to_thread(save_pncp_results, {"data": items}, municipality)
+async def build_summary(start: date, end: date, municipality: str | None, modalities=licitacoes.DEFAULT_MODALITIES, only_mpe: bool = False) -> dict:
+    total, items, sample_complete, no_failures = await pncp_sync.collect(start, end, municipality, modalities)
     shown = [item for item in items if licitacoes.has_me_epp_signal(item)] if only_mpe else items
     return {
         **licitacoes.summarize(shown, len(shown) if only_mpe else total),
@@ -132,10 +150,15 @@ async def public_summary(municipio: str | None = None, inicio: str | None = None
         raise HTTPException(502, "O PNCP não conseguiu carregar todas as páginas solicitadas. Tente novamente mais tarde.") from error
 
 
+@app.get("/api/publico/sincronizacao")
+async def public_sync_status():
+    return await pncp_sync.sync_status()
+
+
 @app.get("/api/publico/abertos")
 async def public_open_notices(municipio: str | None = None, todos: bool = False, somente_mpe: bool = False):
     try:
-        total, items, sample_complete, no_failures = await licitacoes.fetch_open(resolve_municipality(municipio), date.today())
+        total, items, sample_complete, no_failures = await pncp_sync.fetch_open_cached(resolve_municipality(municipio), date.today())
     except (httpx.HTTPError, RuntimeError) as error:
         raise HTTPException(502, "O PNCP não conseguiu carregar todas as páginas solicitadas. Tente novamente mais tarde.") from error
     if somente_mpe:
@@ -154,8 +177,8 @@ async def municipality_notices(codigo: str, inicio: str | None = None, fim: str 
     start, end = resolve_period(inicio, fim)
     try:
         (open_total, open_items, open_complete, open_ok), (closed_total, period_items, complete, ok) = await asyncio.gather(
-            licitacoes.fetch_open(municipality, date.today()),
-            licitacoes.collect(start, end, municipality),
+            pncp_sync.fetch_open_cached(municipality, date.today()),
+            pncp_sync.collect(start, end, municipality),
         )
     except (httpx.HTTPError, RuntimeError) as error:
         raise HTTPException(502, "O PNCP não conseguiu carregar todas as páginas solicitadas. Tente novamente mais tarde.") from error
@@ -182,7 +205,7 @@ async def mpe_comparison(municipio: str | None = None, inicio: str | None = None
 
     async def one_year(offset: int):
         year_start, year_end = licitacoes.shift_years(start, offset), licitacoes.shift_years(end, offset)
-        total, items, complete, ok = await licitacoes.collect(year_start, year_end, municipality)
+        total, items, complete, ok = await pncp_sync.collect(year_start, year_end, municipality)
         closed = [item for item in items if licitacoes.is_closed(item)]
         mpe_items = [item for item in closed if licitacoes.has_me_epp_signal(item)]
         return {
@@ -197,7 +220,7 @@ async def mpe_comparison(municipio: str | None = None, inicio: str | None = None
 
     try:
         results = await asyncio.gather(*(one_year(offset) for offset in range(anos, -1, -1)))
-    except httpx.HTTPError as error:
+    except (httpx.HTTPError, RuntimeError) as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
     previous = None
     for row in results:
@@ -258,10 +281,10 @@ async def company_opportunities(
         return {**base, "cnae_disponivel": False, "aptas": [], "nao_aptas": [], "total_nao_aptas": 0, "total_incompativeis": 0,
                 "data_inicial": start.isoformat(), "data_final": end.isoformat(), "consulta_completa": True, "amostra_limitada": False}
     try:
-        total, items, sample_complete, no_failures = await licitacoes.collect(
+        total, items, sample_complete, no_failures = await pncp_sync.collect(
             start, end, resolve_municipality(municipio), resolve_modality(modalidade),
         )
-    except httpx.HTTPError as error:
+    except (httpx.HTTPError, RuntimeError) as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
     eligible, restricted, incompatible = [], [], 0
     for item in items:
@@ -322,8 +345,8 @@ async def admin_flow(municipio: str | None = None, inicio: str | None = None, fi
     start, end = resolve_period(inicio, fim)
     municipality = resolve_municipality(municipio)
     try:
-        total, items, sample_complete, no_failures = await licitacoes.collect(start, end, municipality)
-    except httpx.HTTPError as error:
+        total, items, sample_complete, no_failures = await pncp_sync.collect(start, end, municipality)
+    except (httpx.HTTPError, RuntimeError) as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
     recent = sorted(items, key=lambda item: str(item.get("dataPublicacaoPncp") or ""), reverse=True)[:30]
     return {

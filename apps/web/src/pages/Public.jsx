@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { brl, brlCompact, num, pct, useFetch } from '../lib/api';
+import { brl, brlCompact, fmtDateTime, num, pct, useFetch } from '../lib/api';
 import { BarList, Card, CityTable, ColumnChart, Filters, MpeMonthlyChart, Notice, NoticeCard, PriorityNotice, Stat, Tabs, defaultFilters, toRange } from '../components/ui';
 import { CearaMap, MunicipalityPanel, OpenNoticesDialog } from '../components/map';
 
@@ -49,15 +49,25 @@ export default function Public() {
   const params = { municipio: filters.municipio, ...range };
   const summary = useFetch('/api/publico/resumo', { ...params, somente_mpe: mpeOnly ? 1 : '' });
   const open = useFetch('/api/publico/abertos', { municipio: filters.municipio, somente_mpe: mpeOnly ? 1 : '' });
+  const sync = useFetch('/api/publico/sincronizacao', {});
   const s = summary.data;
   const { data: cities } = useFetch('/api/geografia/municipios', {});
   const cityName = cities?.find((city) => String(city.id) === filters.municipio)?.nome;
   const pickCity = (name) => { const found = cities?.find((city) => city.nome === name); if (found) setFilters({ ...filters, municipio: String(found.id) }); };
   const scope = cityName || 'Ceará';
+  const syncRunning = sync.data?.status === 'running' || sync.data?.open_status === 'running';
+  const syncComplete = sync.data?.status === 'complete' && (!sync.data?.open_status || sync.data.open_status === 'complete');
+  const syncLabel = syncRunning ? 'Sincronização em andamento'
+    : syncComplete ? 'Última sincronização concluída'
+      : sync.data?.status === 'error' || sync.data?.open_status === 'error' ? 'Falha na última tentativa'
+        : sync.data ? 'Última tentativa parcial' : '';
+  const syncTimestamp = syncRunning ? sync.data?.last_started_at
+    : syncComplete ? sync.data?.last_completed_at
+      : sync.data?.updated_at;
 
   return (
     <div className="page">
-      <header className="page-head"><p className="eyebrow">VISÃO PÚBLICA · CEARÁ</p><h1>Licitações no {cityName ? cityName : 'Estado do Ceará'}</h1><p className="muted">Dados do PNCP atualizados em tempo real, restritos aos municípios cearenses.</p></header>
+      <header className="page-head public-masthead"><img src="/brasao-ceara.svg" alt="Brasão do Estado do Ceará" /><div><p className="eyebrow">VISÃO PÚBLICA · CEARÁ</p><h1>Licitações no {cityName ? cityName : 'Estado do Ceará'}</h1><p className="muted">Dados sincronizados do PNCP e armazenados no Supabase, restritos aos municípios cearenses.</p>{syncLabel && <p className={`sync-stamp ${syncComplete ? 'ok' : 'warn'}`} aria-live="polite">{syncLabel}{syncTimestamp && ` · ${fmtDateTime(syncTimestamp)}`} · atualização automática a cada 12 horas</p>}</div></header>
       <Card title="Filtros globais"><Filters filters={filters} onChange={setFilters} /></Card>
       {mpeOnly && <PriorityNotice />}
       <Notice error={summary.error} partial={s?.amostra_limitada} incomplete={s && !s.consulta_completa} />

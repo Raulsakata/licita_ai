@@ -29,7 +29,7 @@ function App() {
     <div className="app-shell">
       <button type="button" className="menu-toggle" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>☰ Menu</button>
       <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
-        <div className="brand"><span>◈</span><div><strong>Licita AI</strong><small>Licitações do Ceará</small></div></div>
+        <div className="brand"><img className="brand-crest" src="/brasao-ceara.svg" alt="Brasão do Estado do Ceará" /><div><strong>Licita AI</strong><small>Licitações do Ceará</small></div></div>
         <nav aria-label="Principal">{links.map(([href, id, label, icon]) => <a key={id} href={href} className={route === id ? 'active' : ''} aria-current={route === id ? 'page' : undefined}><i>{icon}</i>{label}</a>)}</nav>
         <footer>Dados públicos<br />PNCP · IBGE · OpenCNPJ</footer>
       </aside>

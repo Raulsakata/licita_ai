@@ -33,14 +33,15 @@ def normalize_opportunity(item: dict, municipality_code: str | None) -> dict | N
     if not pncp_id:
         return None
     unit = item.get("unidadeOrgao") or {}
+    municipality_ibge_code = municipality_code or item.get("codigoMunicipioIbge") or unit.get("codigoIbge")
     try:
         value = float(item.get("valorTotalEstimado") or 0)
     except (TypeError, ValueError):
         value = 0.0
     return {
         "pncp_id": str(pncp_id),
-        "municipality_ibge_code": municipality_code or item.get("codigoMunicipioIbge") or unit.get("codigoIbge"),
-        "uf": unit.get("ufSigla"),
+        "municipality_ibge_code": municipality_ibge_code,
+        "uf": unit.get("ufSigla") or ("CE" if str(municipality_ibge_code or "").startswith("23") else None),
         "estimated_value": value,
         "title": item.get("objetoCompra") or item.get("objetoContratacao"),
         "modality": item.get("modalidadeNome"),
