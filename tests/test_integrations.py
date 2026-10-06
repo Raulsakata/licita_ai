@@ -178,27 +178,53 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             return third_page
 
         with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=get_page)):
-            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6), 1000, 3)
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6))
 
         self.assertEqual(total, 120)
         self.assertEqual(len(items), 70)
         self.assertFalse(complete)
         self.assertFalse(no_failures)
 
-    async def test_open_notices_report_page_cap(self):
-        first_page = {
-            "totalRegistros": 120, "totalPaginas": 3,
-            "data": [{"numeroControlePNCP": f"first-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(50)],
-        }
-        second_page = {
-            "data": [{"numeroControlePNCP": f"second-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(50)],
-        }
-        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=[first_page, second_page])):
-            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6), 1000, 2)
+    async def test_open_notices_fetch_all_reported_pages(self):
+        total_pages = 12
 
-        self.assertEqual(total, 120)
-        self.assertEqual(len(items), 100)
-        self.assertFalse(complete)
+        async def get_page(params):
+            page = params["pagina"]
+            payload = {"data": [{"numeroControlePNCP": f"page-{page}", "unidadeOrgao": {"ufSigla": "CE"}}]}
+            if page == 1:
+                payload.update({"totalRegistros": total_pages, "totalPaginas": total_pages})
+            return payload
+
+        with patch.object(licitacoes, "get_pncp_proposals", AsyncMock(side_effect=get_page)) as pncp:
+            total, items, complete, no_failures = await licitacoes.fetch_open(None, date(2026, 10, 6))
+
+        self.assertEqual(total, total_pages)
+        self.assertEqual(len(items), total_pages)
+        self.assertEqual(pncp.await_count, total_pages)
+        self.assertTrue(complete)
+        self.assertTrue(no_failures)
+
+    async def test_contract_collection_fetches_all_reported_pages(self):
+        total_pages = 5
+
+        async def get_page(params):
+            page = params["pagina"]
+            payload = {
+                "data": [{"numeroControlePNCP": f"contract-{page}-{i}", "unidadeOrgao": {"ufSigla": "CE"}} for i in range(50)],
+            }
+            if page == 1:
+                payload.update({"totalRegistros": total_pages * 50, "totalPaginas": total_pages})
+            return payload
+
+        with patch.object(licitacoes, "get_pncp_contracts", AsyncMock(side_effect=get_page)) as pncp:
+            total, items, complete, no_failures = await licitacoes.collect(
+                date(2026, 9, 1), date(2026, 9, 30), modalities=(6,),
+            )
+
+        self.assertEqual(total, total_pages * 50)
+        self.assertEqual(len(items), total_pages * 50)
+        self.assertEqual(pncp.await_count, total_pages)
+        self.assertTrue(complete)
         self.assertTrue(no_failures)
 
     async def test_public_open_route_exposes_partial_status(self):

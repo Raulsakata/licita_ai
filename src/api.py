@@ -19,7 +19,6 @@ from src.validators import validate_cnpj
 
 MODALIDADE_CODES = {item["codigo"] for item in PNCP_MODALIDADES}
 PUBLIC_COMPANY_KEYS = COMPANY_PUBLIC_COLUMNS.split(",")
-MAX_OPEN_PAGES = 10
 
 app = FastAPI(title="Licita AI API", version="0.3.0")
 app.add_middleware(
@@ -136,9 +135,7 @@ async def public_summary(municipio: str | None = None, inicio: str | None = None
 @app.get("/api/publico/abertos")
 async def public_open_notices(municipio: str | None = None, todos: bool = False, somente_mpe: bool = False):
     try:
-        total, items, sample_complete, no_failures = await licitacoes.fetch_open(
-            resolve_municipality(municipio), date.today(), 1000 if todos else 20, MAX_OPEN_PAGES if todos else 1,
-        )
+        total, items, sample_complete, no_failures = await licitacoes.fetch_open(resolve_municipality(municipio), date.today())
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
     if somente_mpe:
@@ -157,8 +154,8 @@ async def municipality_notices(codigo: str, inicio: str | None = None, fim: str 
     start, end = resolve_period(inicio, fim)
     try:
         (open_total, open_items, open_complete, open_ok), (closed_total, period_items, complete, ok) = await asyncio.gather(
-            licitacoes.fetch_open(municipality, date.today(), 200, MAX_OPEN_PAGES),
-            licitacoes.collect(start, end, municipality, pages=3),
+            licitacoes.fetch_open(municipality, date.today()),
+            licitacoes.collect(start, end, municipality),
         )
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
@@ -173,7 +170,7 @@ async def municipality_notices(codigo: str, inicio: str | None = None, fim: str 
     return {
         "municipio": municipality, "data_inicial": start.isoformat(), "data_final": end.isoformat(), "somente_mpe": True,
         "abertas_total": len(open_items), "abertas": [licitacoes.shape_item(item) for item in open_items],
-        "encerradas_total": len(closed), "encerradas": [licitacoes.shape_item(item) for item in closed[:200]],
+        "encerradas_total": len(closed), "encerradas": [licitacoes.shape_item(item) for item in closed],
         "consulta_completa": ok and open_ok, "amostra_limitada": not complete or not open_complete,
     }
 
@@ -185,7 +182,7 @@ async def mpe_comparison(municipio: str | None = None, inicio: str | None = None
 
     async def one_year(offset: int):
         year_start, year_end = licitacoes.shift_years(start, offset), licitacoes.shift_years(end, offset)
-        total, items, complete, ok = await licitacoes.collect(year_start, year_end, municipality, pages=2)
+        total, items, complete, ok = await licitacoes.collect(year_start, year_end, municipality)
         closed = [item for item in items if licitacoes.is_closed(item)]
         mpe_items = [item for item in closed if licitacoes.has_me_epp_signal(item)]
         return {
@@ -262,7 +259,7 @@ async def company_opportunities(
                 "data_inicial": start.isoformat(), "data_final": end.isoformat(), "consulta_completa": True, "amostra_limitada": False}
     try:
         total, items, sample_complete, no_failures = await licitacoes.collect(
-            start, end, resolve_municipality(municipio), resolve_modality(modalidade), pages=3,
+            start, end, resolve_municipality(municipio), resolve_modality(modalidade),
         )
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error

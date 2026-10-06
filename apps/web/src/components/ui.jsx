@@ -11,7 +11,7 @@ export function Notice({ error, partial, incomplete }) {
   return <>
     {error && <div className="notice error" role="alert">{error}</div>}
     {incomplete && <div className="notice error" role="status">O PNCP não carregou todas as páginas. Parte dos dados pode estar ausente; tente novamente mais tarde.</div>}
-    {partial && <div className="notice" role="status">Resultado parcial: a consulta atingiu o limite de páginas ou só parte dos registros foi carregada. Quantidades e valores exibidos podem não representar o total.</div>}
+    {partial && <div className="notice" role="status">Resultado parcial: o PNCP não retornou todos os registros solicitados. Quantidades e valores exibidos podem estar incompletos.</div>}
   </>;
 }
 
