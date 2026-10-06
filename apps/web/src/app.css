@@ -75,3 +75,8 @@ code{font-size:12px;word-break:break-all}.search{width:100%;max-width:340px}
 .muni-panel{border-top:4px solid var(--accent)}
 .overlay{position:fixed;inset:0;background:#0008;z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:4vh 16px;overflow:auto}
 .dialog{background:var(--bg);border-radius:16px;padding:20px;width:min(1180px,100%);display:flex;flex-direction:column;gap:12px}
+.col.base{fill:#cfd8e0}.col.base:hover{fill:#b8c4ce}.dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}.dot.base{background:#cfd8e0}.dot.mpe{background:#e0a366}
+.priority{background:#fff1df;border:1px solid #f0c48f;color:#6e3d0b;padding:12px 16px;border-radius:12px;font-size:14px;line-height:1.45}
+.map-legend i.dot{width:10px;height:10px;border-radius:2px}
+.map-legend i.dot.base{background:#cfd8e0}.map-legend i.dot.mpe{background:#e0a366}
+.badge.cnae{background:#e6eefb;color:#1d4f9c}

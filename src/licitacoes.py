@@ -120,6 +120,27 @@ async def collect(start: date, end: date, municipality: str | None = None, modal
     return total, list(unique.values()), sample_complete, no_failures
 
 
+def is_closed(item: dict, now_iso: str | None = None) -> bool:
+    closing = str(item.get("dataEncerramentoProposta") or "")
+    return bool(closing) and closing < (now_iso or datetime.now().isoformat())
+
+
+def closed_mpe_by_month(items: list[dict]) -> list[dict]:
+    """Participação de ME/EPP nas licitações já encerradas, agrupadas pelo mês de encerramento."""
+    now_iso = datetime.now().isoformat()
+    months: dict[str, dict] = defaultdict(lambda: {"encerradas": 0, "encerradas_mpe": 0, "valor_mpe": 0.0, "valor_encerradas": 0.0})
+    for item in items:
+        if not is_closed(item, now_iso):
+            continue
+        bucket = months[str(item["dataEncerramentoProposta"])[:7]]
+        bucket["encerradas"] += 1
+        bucket["valor_encerradas"] += item_value(item)
+        if has_me_epp_signal(item):
+            bucket["encerradas_mpe"] += 1
+            bucket["valor_mpe"] += item_value(item)
+    return [{"mes": month, **data, "participacao_mpe": data["encerradas_mpe"] / data["encerradas"]} for month, data in sorted(months.items())]
+
+
 def summarize(items: list[dict], reported_total: int) -> dict:
     by_city: dict[str, dict] = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})
     by_month: dict[str, dict] = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})

@@ -29,15 +29,18 @@ function Panel({ session, onLogout }) {
       {!apt && <div className="notice restricted-banner" role="status"><b>Não Apta para editais com exigência de porte.</b> {company.motivo} Editais exclusivos para ME/EPP ficam bloqueados; você continua vendo os demais.</div>}
       <Card title="Refinar busca"><Filters filters={filters} onChange={setFilters} /></Card>
       <Notice error={error} partial={data?.amostra_limitada} />
+      {data && !data.cnae_disponivel && <div className="notice error" role="alert">Não foi possível obter o CNAE da sua empresa. Sem ele não há como indicar licitações compatíveis; entre em contato com o administrador.</div>}
+      {data?.cnae?.length > 0 && <div className="notice ok"><b>Filtro por CNAE:</b> exibindo apenas licitações cujo objeto cita termos de: {data.cnae.map((c) => c.descricao).join(' · ')}.</div>}
       <div className="stats">
-        <Stat label="Licitações em que você pode participar" value={data ? num(data.aptas.length) : ''} loading={loading} tone="good" />
+        <Stat label="Licitações compatíveis em que você pode participar" value={data ? num(data.aptas.length) : ''} loading={loading} tone="good" />
         <Stat label="Bloqueadas por porte" value={data ? num(data.total_nao_aptas) : ''} loading={loading} tone={data?.total_nao_aptas ? 'bad' : ''} />
+        <Stat label="Fora do seu CNAE (ocultas)" value={data ? num(data.total_incompativeis) : ''} loading={loading} />
       </div>
       <Card title="Oportunidades aptas" aside={<div className="row-gap"><label className="check"><input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> Somente com propostas abertas</label></div>}>
         <input className="search" type="search" placeholder="Buscar por objeto, órgão ou município…" value={text} onChange={(e) => setText(e.target.value)} />
         <p className="muted" aria-live="polite">{loading ? 'Atualizando…' : `${num(visible.length)} licitação(ões) exibida(s)`}</p>
         <div className="notice-grid" style={{ opacity: loading ? 0.5 : 1 }}>{visible.map((item) => <NoticeCard key={item.id} item={item} />)}</div>
-        {data && !visible.length && !loading && <p className="empty">Nenhuma licitação apta para os filtros atuais.</p>}
+        {data && !visible.length && !loading && <p className="empty">Nenhuma licitação compatível com o seu CNAE para os filtros atuais.</p>}
       </Card>
       {data?.total_nao_aptas > 0 && (
         <Card title="Editais com restrição de porte" aside={<button type="button" className="chip" onClick={() => setShowRestricted(!showRestricted)}>{showRestricted ? 'Ocultar' : `Mostrar (${data.total_nao_aptas})`}</button>}>

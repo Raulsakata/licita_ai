@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { brlCompact, num, useFetch } from '../lib/api';
-import { Card, Filters, Notice, NoticeCard, Tabs, defaultFilters, toRange } from './ui';
+import { Card, Filters, Notice, NoticeCard, PriorityNotice, Tabs, defaultFilters, toRange } from './ui';
 
 const normalize = (text) => String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
@@ -70,6 +70,7 @@ export function MunicipalityPanel({ code, name, onClose }) {
   return (
     <div ref={ref}>
       <Card title={`${name || code} — licitações`} className="muni-panel" aside={<button type="button" className="chip" onClick={onClose}>Fechar ✕</button>}>
+        <PriorityNotice />
         <p className="muted">Abertas: vigentes hoje. Encerradas: com prazo de propostas já vencido, dentro do período selecionado.</p>
         <Filters filters={filters} onChange={setFilters} hideCity />
         <Notice error={error} partial={data?.amostra_limitada} />
@@ -85,8 +86,8 @@ export function MunicipalityPanel({ code, name, onClose }) {
   );
 }
 
-export function OpenNoticesDialog({ municipio, scope, onClose }) {
-  const { data, loading, error } = useFetch('/api/publico/abertos', { municipio, todos: 1 });
+export function OpenNoticesDialog({ municipio, scope, mpeOnly, onClose }) {
+  const { data, loading, error } = useFetch('/api/publico/abertos', { municipio, todos: 1, somente_mpe: mpeOnly ? 1 : '' });
   const [text, setText] = useState('');
   useEffect(() => { const onKey = (e) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [onClose]);
   const list = (data?.editais || []).filter((item) => `${item.objeto} ${item.orgao} ${item.municipio}`.toLowerCase().includes(text.toLowerCase()));
@@ -95,6 +96,7 @@ export function OpenNoticesDialog({ municipio, scope, onClose }) {
       <div className="dialog" role="dialog" aria-modal="true" aria-label="Licitações abertas" onClick={(e) => e.stopPropagation()}>
         <header className="card-head"><h2>Licitações vigentes abertas — {scope}</h2><button type="button" className="chip" onClick={onClose}>Fechar ✕</button></header>
         <input className="search" type="search" autoFocus placeholder="Buscar por objeto, órgão ou município…" value={text} onChange={(e) => setText(e.target.value)} />
+        {mpeOnly && <PriorityNotice />}
         <p className="muted" aria-live="polite">{loading ? 'Carregando todas as licitações abertas…' : `${num(list.length)} exibida(s) de ${num(data?.total)} abertas no total`}</p>
         <Notice error={error} />
         <div className="notice-grid">{list.map((item) => <NoticeCard key={item.id} item={item} showStatus={false} />)}</div>

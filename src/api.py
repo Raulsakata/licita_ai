@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from src import auth, licitacoes
+from src import auth, cnae, licitacoes
 from src.config import settings
 from src.db import (
     COMPANY_PUBLIC_COLUMNS, count_rows, create_saved_search, delete_company, delete_saved_search, get_company, get_db,
@@ -109,36 +109,42 @@ async def ceara_map():
 
 # ---------- Perfil 1: público ----------
 
-async def build_summary(start: date, end: date, municipality: str | None, modalities=licitacoes.DEFAULT_MODALITIES, persist: bool = True) -> dict:
+async def build_summary(start: date, end: date, municipality: str | None, modalities=licitacoes.DEFAULT_MODALITIES, persist: bool = True, only_mpe: bool = False) -> dict:
     total, items, sample_complete, no_failures = await licitacoes.collect(start, end, municipality, modalities)
     if persist and items:
         await asyncio.to_thread(save_pncp_results, {"data": items}, municipality)
+    shown = [item for item in items if licitacoes.has_me_epp_signal(item)] if only_mpe else items
     return {
-        **licitacoes.summarize(items, total),
+        **licitacoes.summarize(shown, len(shown) if only_mpe else total),
+        "mpe_mensal": licitacoes.closed_mpe_by_month(items),
+        "somente_mpe": only_mpe,
         "uf": licitacoes.UF, "municipio": municipality,
         "data_inicial": start.isoformat(), "data_final": end.isoformat(),
-        "consulta_completa": no_failures, "amostra_limitada": not sample_complete,
+        "consulta_completa": no_failures, "amostra_limitada": not sample_complete or only_mpe,
     }
 
 
 @app.get("/api/publico/resumo")
-async def public_summary(municipio: str | None = None, inicio: str | None = None, fim: str | None = None):
+async def public_summary(municipio: str | None = None, inicio: str | None = None, fim: str | None = None, somente_mpe: bool = False):
     start, end = resolve_period(inicio, fim)
     try:
-        return await build_summary(start, end, resolve_municipality(municipio))
+        return await build_summary(start, end, resolve_municipality(municipio), only_mpe=somente_mpe)
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
 
 
 @app.get("/api/publico/abertos")
-async def public_open_notices(municipio: str | None = None, todos: bool = False):
+async def public_open_notices(municipio: str | None = None, todos: bool = False, somente_mpe: bool = False):
     try:
         total, items = await licitacoes.fetch_open(
             resolve_municipality(municipio), date.today(), 1000 if todos else 20, MAX_OPEN_PAGES if todos else 1,
         )
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
-    return {"total": total, "editais": [licitacoes.shape_item(item) for item in items]}
+    if somente_mpe:
+        items = [item for item in items if licitacoes.has_me_epp_signal(item)]
+        total = len(items)
+    return {"total": total, "somente_mpe": somente_mpe, "editais": [licitacoes.shape_item(item) for item in items]}
 
 
 @app.get("/api/publico/municipio/{codigo}/licitacoes")
@@ -153,12 +159,16 @@ async def municipality_notices(codigo: str, inicio: str | None = None, fim: str 
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
     now = datetime.now().isoformat()
+    open_items = [item for item in open_items if licitacoes.has_me_epp_signal(item)]
     open_ids = {item.get("numeroControlePNCP") for item in open_items}
-    closed = [item for item in period_items if item.get("numeroControlePNCP") not in open_ids and str(item.get("dataEncerramentoProposta") or "") < now]
+    closed = [
+        item for item in period_items
+        if item.get("numeroControlePNCP") not in open_ids and licitacoes.has_me_epp_signal(item) and str(item.get("dataEncerramentoProposta") or "") < now
+    ]
     closed.sort(key=lambda item: str(item.get("dataEncerramentoProposta") or ""), reverse=True)
     return {
-        "municipio": municipality, "data_inicial": start.isoformat(), "data_final": end.isoformat(),
-        "abertas_total": open_total, "abertas": [licitacoes.shape_item(item) for item in open_items],
+        "municipio": municipality, "data_inicial": start.isoformat(), "data_final": end.isoformat(), "somente_mpe": True,
+        "abertas_total": len(open_items), "abertas": [licitacoes.shape_item(item) for item in open_items],
         "encerradas_total": len(closed), "encerradas": [licitacoes.shape_item(item) for item in closed[:200]],
         "consulta_completa": ok, "amostra_limitada": not complete,
     }
@@ -172,12 +182,15 @@ async def mpe_comparison(municipio: str | None = None, inicio: str | None = None
     async def one_year(offset: int):
         year_start, year_end = licitacoes.shift_years(start, offset), licitacoes.shift_years(end, offset)
         total, items, complete, ok = await licitacoes.collect(year_start, year_end, municipality, pages=2)
-        mpe_items = [item for item in items if licitacoes.has_me_epp_signal(item)]
+        closed = [item for item in items if licitacoes.is_closed(item)]
+        mpe_items = [item for item in closed if licitacoes.has_me_epp_signal(item)]
         return {
             "ano": year_end.year, "data_inicial": year_start.isoformat(), "data_final": year_end.isoformat(),
             "quantidade_total": max(total, len(items)), "quantidade_amostra": len(items),
-            "quantidade_mpe": len(mpe_items), "valor_mpe": sum(licitacoes.item_value(item) for item in mpe_items),
-            "valor_amostra": sum(licitacoes.item_value(item) for item in items),
+            "quantidade_encerradas": len(closed), "quantidade_mpe": len(mpe_items),
+            "participacao_mpe": len(mpe_items) / len(closed) if closed else None,
+            "valor_mpe": sum(licitacoes.item_value(item) for item in mpe_items),
+            "valor_amostra": sum(licitacoes.item_value(item) for item in closed),
             "consulta_completa": ok, "amostra_limitada": not complete,
         }
 
@@ -236,24 +249,34 @@ async def company_opportunities(
     if not row or not row.get("ativo", True):
         raise HTTPException(401, "Sessão inválida ou expirada")
     eligibility = assess_eligibility(row)
+    cnaes = cnae.company_cnaes(row.get("raw_data"), row.get("cnae_principal"))
+    matcher, terms = cnae.build_matcher(cnaes)
+    base = {"empresa": eligibility.model_dump(exclude={"oportunidades"}), "cnae": cnaes, "palavras_chave": terms}
     start, end = resolve_period(inicio, fim)
+    if not terms:
+        return {**base, "cnae_disponivel": False, "aptas": [], "nao_aptas": [], "total_nao_aptas": 0, "total_incompativeis": 0,
+                "data_inicial": start.isoformat(), "data_final": end.isoformat(), "consulta_completa": True, "amostra_limitada": False}
     try:
         total, items, sample_complete, no_failures = await licitacoes.collect(
-            start, end, resolve_municipality(municipio), resolve_modality(modalidade), pages=2,
+            start, end, resolve_municipality(municipio), resolve_modality(modalidade), pages=3,
         )
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o PNCP") from error
-    eligible, restricted = [], []
+    eligible, restricted, incompatible = [], [], 0
     for item in items:
-        shaped = licitacoes.shape_item(item)
+        matched = matcher(str(item.get("objetoCompra") or ""))
+        if not matched:
+            incompatible += 1
+            continue
+        shaped = {**licitacoes.shape_item(item), "cnae_termos": matched}
         if shaped["exige_porte_me_epp"] and not eligibility.apta_indicativamente:
             restricted.append({**shaped, "status": "Não Apta", "motivo": eligibility.motivo})
         else:
             eligible.append({**shaped, "status": "Apta"})
     eligible.sort(key=lambda entry: (entry["encerramento_propostas"] is None, entry["encerramento_propostas"] or ""))
     return {
-        "empresa": eligibility.model_dump(exclude={"oportunidades"}),
-        "aptas": eligible, "nao_aptas": restricted[:50], "total_nao_aptas": len(restricted),
+        **base, "cnae_disponivel": True,
+        "aptas": eligible, "nao_aptas": restricted[:50], "total_nao_aptas": len(restricted), "total_incompativeis": incompatible,
         "data_inicial": start.isoformat(), "data_final": end.isoformat(),
         "consulta_completa": no_failures, "amostra_limitada": not sample_complete,
     }

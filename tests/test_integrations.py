@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 import src.api as api
 import src.auth as auth
+import src.cnae as cnae
 import src.licitacoes as licitacoes
 import src.db as db
 import src.extract as extract
@@ -129,14 +130,35 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             auth.require_admin(f"Bearer {token}")
 
     async def test_company_sees_only_apt_opportunities(self):
-        row = {"cnpj": "11222333000181", "porte": "Demais", "situacao_cadastral": "Ativa", "ativo": True}
-        open_item = {"numeroControlePNCP": "1-1-1", "objetoCompra": "Aquisição de material", "unidadeOrgao": {"ufSigla": "CE"}}
-        restricted = {"numeroControlePNCP": "2-2-2", "objetoCompra": "Exclusiva para ME e EPP", "unidadeOrgao": {"ufSigla": "CE"}}
-        pncp = AsyncMock(return_value={"totalRegistros": 2, "totalPaginas": 1, "data": [open_item, restricted]})
+        row = {"cnpj": "11222333000181", "porte": "Demais", "situacao_cadastral": "Ativa", "ativo": True,
+               "raw_data": {"cnaes": [{"codigo": "4784900", "descricao": "Comércio varejista de gás liquefeito de petróleo (GLP)"}]}}
+        open_item = {"numeroControlePNCP": "1-1-1", "objetoCompra": "Aquisição de gás de cozinha GLP", "unidadeOrgao": {"ufSigla": "CE"}}
+        unrelated = {"numeroControlePNCP": "3-3-3", "objetoCompra": "Aquisição de material de escritório", "unidadeOrgao": {"ufSigla": "CE"}}
+        restricted = {"numeroControlePNCP": "2-2-2", "objetoCompra": "Gás - exclusiva para ME e EPP", "unidadeOrgao": {"ufSigla": "CE"}}
+        pncp = AsyncMock(return_value={"totalRegistros": 3, "totalPaginas": 1, "data": [open_item, restricted, unrelated]})
         with patch.object(api, "get_company", MagicMock(return_value=row)), patch.object(licitacoes, "get_pncp_contracts", pncp):
             result = await api.company_opportunities(None, "2026-09-01", "2026-09-30", 6, {"sub": row["cnpj"], "role": "empresa"})
         self.assertEqual([i["id"] for i in result["aptas"]], ["1-1-1"])
+        self.assertEqual(result["total_incompativeis"], 1)
         self.assertEqual(result["nao_aptas"][0]["status"], "Não Apta")
+
+    def test_cnae_matcher_requires_related_terms(self):
+        match, _ = cnae.build_matcher([{"codigo": "4784900", "descricao": "Comércio varejista de gás liquefeito de petróleo (GLP)"}])
+        self.assertTrue(match("Aquisição de gás GLP para escolas"))
+        self.assertFalse(match("Contratação de serviços de limpeza"))
+        weak_only, _ = cnae.build_matcher([{"codigo": "1", "descricao": "Manutenção e reparação de veículos"}])
+        self.assertFalse(weak_only("Manutenção predial"))
+        self.assertTrue(weak_only("Manutenção de veículos da frota"))
+
+    def test_closed_mpe_participation_by_month(self):
+        items = [
+            {"dataEncerramentoProposta": "2020-03-10T10:00:00", "objetoCompra": "Exclusivo para ME e EPP", "valorTotalEstimado": 100},
+            {"dataEncerramentoProposta": "2020-03-20T10:00:00", "objetoCompra": "Aquisição geral", "valorTotalEstimado": 50},
+            {"dataEncerramentoProposta": "2999-01-01T10:00:00", "objetoCompra": "Exclusivo para ME e EPP"},
+        ]
+        rows = licitacoes.closed_mpe_by_month(items)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["mes"], rows[0]["encerradas"], rows[0]["encerradas_mpe"], rows[0]["participacao_mpe"]), ("2020-03", 2, 1, 0.5))
 
 
 if __name__ == "__main__":

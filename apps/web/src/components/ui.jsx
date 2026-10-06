@@ -12,6 +12,10 @@ export function Notice({ error, partial }) {
   return null;
 }
 
+export function PriorityNotice() {
+  return <div className="priority" role="note"><b>Micro e pequenas empresas são prioridade.</b> Neste município exibimos apenas licitações liberadas para ME/EPP (exclusivas ou com cota reservada, conforme a LC 123/2006).</div>;
+}
+
 export function Card({ title, aside, children, className = '' }) {
   return <section className={`card ${className}`}><header className="card-head"><h2>{title}</h2>{aside}</header>{children}</section>;
 }
@@ -135,6 +139,7 @@ export function NoticeCard({ item, locked, showStatus = true }) {
       <header>
         {showStatus && <span className={`badge ${locked ? 'bad' : 'good'}`}>{locked ? '🔒 Não Apta' : 'Apta'}</span>}
         {item.exige_porte_me_epp && <span className="badge">Exigência ME/EPP</span>}
+        {item.cnae_termos?.length > 0 && <span className="badge cnae" title="Termos do seu CNAE encontrados no objeto">CNAE: {item.cnae_termos.join(', ')}</span>}
         <span className={`badge ${isOpen ? 'good' : ''}`}>{isOpen ? 'Propostas abertas' : 'Fora do prazo / sem prazo'}</span>
       </header>
       <h3>{item.objeto || 'Objeto não informado'}</h3>
@@ -150,5 +155,37 @@ export function NoticeCard({ item, locked, showStatus = true }) {
       </dl>}
       <footer>{item.link_edital && <a href={item.link_edital} target="_blank" rel="noopener noreferrer">Edital no PNCP ↗</a>}{item.link_origem && <a href={item.link_origem} target="_blank" rel="noopener noreferrer">Sistema de origem ↗</a>}</footer>
     </article>
+  );
+}
+
+export function MpeMonthlyChart({ rows }) {
+  const [metric, setMetric] = useState('quantidade');
+  const [hover, setHover] = useState(null);
+  if (!rows?.length) return <p className="empty">Nenhuma licitação encerrada no período selecionado.</p>;
+  const total = (row) => (metric === 'valor' ? row.valor_encerradas : row.encerradas);
+  const mpe = (row) => (metric === 'valor' ? row.valor_mpe : row.encerradas_mpe);
+  const format = metric === 'valor' ? brlCompact : num;
+  const max = Math.max(1, ...rows.map(total));
+  const slot = 64;
+  const bar = (value, x, cls) => <rect className={cls} x={x} y={150 - (value / max) * 130} width="22" height={Math.max((value / max) * 130, 1)} rx="3" />;
+  const hovered = hover != null ? rows[hover] : null;
+  return (
+    <div className="column-chart">
+      <div className="chart-bar-head">
+        <Tabs value={metric} onChange={setMetric} options={[['quantidade', 'Quantidade'], ['valor', 'Valor (R$)']]} />
+        <span className="hover-info" aria-live="polite">{hovered ? `${hovered.mes}: MPE ${format(mpe(hovered))} de ${format(total(hovered))} encerradas (${(hovered.participacao_mpe * 100).toFixed(0)}%)` : 'Licitações encerradas por mês de encerramento'}</span>
+      </div>
+      <svg viewBox={`0 0 ${rows.length * slot + 20} 200`} role="img" aria-label="Participação de micro e pequenas empresas nas licitações encerradas">
+        {rows.map((row, index) => (
+          <g key={row.mes} tabIndex={0} onMouseEnter={() => setHover(index)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(index)} onBlur={() => setHover(null)}>
+            {bar(total(row), index * slot + 8, 'col base')}
+            {bar(mpe(row), index * slot + 32, `col ${hover === index ? 'hot' : ''}`)}
+            <text x={index * slot + 32} y="168" textAnchor="middle" className="col-label">{row.mes.slice(2)}</text>
+            <text x={index * slot + 32} y="184" textAnchor="middle" className="col-value">{(row.participacao_mpe * 100).toFixed(0)}% MPE</text>
+          </g>
+        ))}
+      </svg>
+      <div className="map-legend"><span><i className="dot base" /> Total encerradas</span><span><i className="dot mpe" /> Com participação de MPE</span></div>
+    </div>
   );
 }
