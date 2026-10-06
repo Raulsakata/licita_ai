@@ -65,6 +65,38 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, second)
         self.assertEqual(client.calls, 2)
 
+    async def test_pncp_honors_retry_after_above_two_seconds(self):
+        client = FakeClient([
+            FakeResponse(429, {}, {"Retry-After": "4"}),
+            FakeResponse(200, {"data": [], "totalRegistros": 0}),
+        ])
+        with patch("src.extract.httpx.AsyncClient", return_value=client), patch("src.extract.asyncio.sleep", new_callable=AsyncMock) as sleep, patch.object(
+            extract, "_pncp_min_interval_seconds", 0,
+        ), patch.object(extract, "_pncp_last_request_at", 0):
+            await extract.get_pncp_contracts({"uf": "CE", "pagina": 987654})
+
+        sleep.assert_awaited_once()
+        self.assertAlmostEqual(sleep.await_args.args[0], 4.0, places=2)
+        self.assertEqual(client.calls, 2)
+
+    async def test_pncp_rate_limit_cooldown_applies_to_other_pages(self):
+        client = FakeClient([
+            FakeResponse(429, {}, {"Retry-After": "5"}),
+            FakeResponse(200, {"data": [{"id": 1}]}),
+            FakeResponse(200, {"data": [{"id": 2}]}),
+        ])
+        with patch("src.extract.httpx.AsyncClient", return_value=client), patch("src.extract.asyncio.sleep", new_callable=AsyncMock) as sleep, patch.object(
+            extract, "_pncp_min_interval_seconds", 0,
+        ), patch.object(extract, "_pncp_last_request_at", 0), patch.object(extract, "_pncp_cooldown_until", 0):
+            first = await extract.get_pncp_contracts({"uf": "CE", "pagina": 1})
+            second = await extract.get_pncp_contracts({"uf": "CE", "pagina": 2})
+
+        self.assertEqual(first["data"][0]["id"], 1)
+        self.assertEqual(second["data"][0]["id"], 2)
+        self.assertEqual(client.calls, 3)
+        self.assertEqual(sleep.await_count, 2)
+        self.assertTrue(all(abs(call.args[0] - 5.0) < 0.02 for call in sleep.await_args_list))
+
     async def test_open_cnpj_and_ibge_use_shared_http_adapter(self):
         client = FakeClient([
             FakeResponse(200, {"cnpj": "11222333000181"}),
