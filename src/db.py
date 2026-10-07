@@ -361,3 +361,26 @@ def update_pncp_open_sync_state(status: str, started_at: str | None = None, comp
     except APIError as error:
         logger.warning("Falha ao atualizar estado de editais abertos: %s", error)
         return False
+
+
+def list_media_images(kind: str) -> list[dict]:
+    table = _table("media_images")
+    if table is None:
+        return []
+    try:
+        return table.select("key,title,credit").eq("kind", kind).order("key").execute().data or []
+    except APIError as error:
+        logger.warning("Falha ao listar imagens: %s", error)
+        return []
+
+
+def get_media_image(key: str) -> dict | None:
+    table = _table("media_images")
+    if table is None:
+        return None
+    try:
+        result = table.select("content_type,data_b64").eq("key", key).limit(1).execute()
+        return result.data[0] if result.data else None
+    except APIError as error:
+        logger.warning("Falha ao carregar imagem %s: %s", key, error)
+        return None

@@ -1,7 +1,10 @@
 import asyncio
 from datetime import date, datetime, timedelta, timezone
 from hmac import compare_digest
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+import base64
+import re
+from functools import lru_cache
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import httpx
@@ -9,7 +12,7 @@ from src import auth, cnae, licitacoes, pncp_sync
 from src.config import settings
 from src.db import (
     COMPANY_PUBLIC_COLUMNS, count_rows, create_saved_search, delete_company, delete_saved_search, get_company, get_db,
-    list_companies, list_logs, list_saved_searches, log_event, save_company, update_company,
+    get_media_image, list_companies, list_logs, list_media_images, list_saved_searches, log_event, save_company, update_company,
     upsert_company_fields,
 )
 from src.domain import PNCP_MODALIDADES
@@ -128,6 +131,29 @@ async def ceara_map():
         return await get_ibge_state_mesh(int(licitacoes.IBGE_UF_CODE))
     except httpx.HTTPError as error:
         raise HTTPException(502, "Falha ao consultar o IBGE") from error
+
+
+# ---------- Imagens (gravadas no banco por scripts/fetch_images.py) ----------
+
+@lru_cache(maxsize=256)
+def _image_bytes(key: str) -> tuple[bytes, str] | None:
+    row = get_media_image(key)
+    return (base64.b64decode(row["data_b64"]), row["content_type"]) if row else None
+
+
+@app.get("/api/imagens")
+def media_list(tipo: str = Query("turismo", pattern="^(cidade|turismo)$")):
+    return list_media_images(tipo)
+
+
+@app.get("/api/imagens/{key}")
+def media_image(key: str):
+    if not re.fullmatch(r"[a-z0-9-]{3,40}", key):
+        raise HTTPException(404, "Imagem não encontrada")
+    found = _image_bytes(key)
+    if not found:
+        raise HTTPException(404, "Imagem não encontrada")
+    return Response(found[0], media_type=found[1], headers={"Cache-Control": "public, max-age=604800, immutable"})
 
 
 # ---------- Perfil 1: público ----------

@@ -117,3 +117,8 @@ code{font-size:12px;word-break:break-all}.search{width:100%;max-width:340px}
 [data-theme=dark] .hero-btn{background:var(--card);color:var(--ink)}
 .admin-gear{font-size:20px;padding:6px 10px!important}
 .profiles{display:none}
+.tip-img{width:200px;height:120px;object-fit:cover;border-radius:6px;margin-bottom:4px;background:#2c3a45}
+.hero-slides{position:absolute;inset:0;z-index:0}.hero-slide{position:absolute;inset:0;background-size:cover;background-position:center;opacity:0;transition:opacity 1.4s}
+.hero-slide.on{opacity:1}.hero-slides::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,#0006,#0008)}
+.hero::before{z-index:1}.hero>*:not(.hero-slides){z-index:2}
+.hero-credit{position:absolute;right:14px;bottom:8px;z-index:3;font-size:12px;color:#fff;text-shadow:0 1px 3px #000}

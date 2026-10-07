@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { brlCompact, num, useFetch } from '../lib/api';
+import { API_URL, brlCompact, num, useFetch } from '../lib/api';
 import NoticeExplorer from './explorer';
 import { Card, Filters, Notice, NoticeCard, PriorityNotice, Tabs, defaultFilters, toRange } from './ui';
 
@@ -53,7 +53,7 @@ export function CearaMap({ summary, selected, onSelect }) {
             ))}
           </svg>
         )}
-        {hover && <div className="map-tip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{names[hover.code] || hover.code}</strong>{hoverRow ? <span>{num(hoverRow.quantidade)} licitações · {brlCompact(hoverRow.valor)}</span> : <span>Sem licitações no filtro</span>}</div>}
+        {hover && <div className="map-tip" style={{ left: hover.x + 12, top: hover.y + 12 }}><img key={hover.code} className="tip-img" src={`${API_URL}/api/imagens/${hover.code}`} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><strong>{names[hover.code] || hover.code}</strong>{hoverRow ? <span>{num(hoverRow.quantidade)} licitações · {brlCompact(hoverRow.valor)}</span> : <span>Sem licitações no filtro</span>}</div>}
       </div>
       <div className="map-legend"><span>Menos</span><i /><span>Mais ({metric === 'valor' ? 'valor' : 'licitações'})</span></div>
     </Card>

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { brl, brlCompact, fmtDateTime, num, pct, useFetch } from '../lib/api';
 import { BarList, Card, CityTable, ColumnChart, Filters, MpeMonthlyChart, Notice, NoticeCard, PriorityNotice, Stat, Tabs, defaultFilters, toRange } from '../components/ui';
+import HeroSlides from '../components/HeroSlides';
 import { CearaMap, MunicipalityPanel, OpenNoticesDialog } from '../components/map';
 
 function MpeComparison({ initial }) {
@@ -69,6 +70,7 @@ export default function Public() {
   return (
     <>
     <section className="hero">
+      <HeroSlides />
       <h1>Portal de licitações do Ceará</h1>
       <div className="hero-buttons">
         <a className="hero-btn" href="#painel" onClick={(e) => { e.preventDefault(); document.getElementById('painel')?.scrollIntoView({ behavior: 'smooth' }); }}><b>Cidadão</b><span>Painel público, mapa e valores</span></a>
