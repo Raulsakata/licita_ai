@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { API_URL, useFetch } from '../lib/api';
 
 const SLIDES = 12;
@@ -8,7 +8,9 @@ export default function HeroSlides() {
   const { data } = useFetch('/api/imagens', { tipo: 'cidade' });
   const [index, setIndex] = useState(0);
   const slides = useMemo(() => {
-    const list = [...(data || [])];
+    const all = data || [];
+    const tourist = all.filter((img) => (img.credit || '').startsWith('Commons:'));
+    const list = [...(tourist.length >= SLIDES ? tourist : all)];
     for (let i = list.length - 1; i > 0; i -= 1) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
     return list.slice(0, SLIDES);
   }, [data]);
