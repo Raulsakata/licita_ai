@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { brlCompact, num, useFetch } from '../lib/api';
+import NoticeExplorer from './explorer';
 import { Card, Filters, Notice, NoticeCard, PriorityNotice, Tabs, defaultFilters, toRange } from './ui';
 
 const normalize = (text) => String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -99,7 +100,7 @@ export function OpenNoticesDialog({ municipio, scope, mpeOnly, onClose, initialT
         {mpeOnly && <PriorityNotice />}
         <p className="muted" aria-live="polite">{loading ? 'Carregando todas as licitações abertas…' : `${num(list.length)} exibida(s) de ${num(data?.total)} abertas no total`}</p>
         <Notice error={error} partial={data?.amostra_limitada} incomplete={data && !data.consulta_completa} />
-        <div className="notice-grid">{list.map((item) => <NoticeCard key={item.id} item={item} showStatus={false} />)}</div>
+        <NoticeExplorer items={list} />
       </div>
     </div>
   );

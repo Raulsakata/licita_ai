@@ -94,3 +94,20 @@ code{font-size:12px;word-break:break-all}.search{width:100%;max-width:340px}
 .map-legend i.dot{width:10px;height:10px;border-radius:2px}
 .map-legend i.dot.base{background:#cfd8e0}.map-legend i.dot.mpe{background:#fb9a4a}
 .badge.cnae{background:#e6eefb;color:#1d4f9c}
+
+.theme-toggle{background:none;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:16px;color:var(--ink)}
+.star{margin-left:auto;background:none;border:0;font-size:20px;color:#e0a100;line-height:1;padding:0}
+.notice-card header{align-items:center}
+.badge.demo{background:#fff3cd;color:#7a5b00}
+.mock-list{margin:0;padding-left:18px;font-size:14px;display:flex;flex-direction:column;gap:6px}
+.funnel{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.funnel-col{background:var(--bg);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:90px}.funnel-col h3{font-size:14px}
+.funnel-item{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;font-size:13px}.funnel-item p{margin:0;color:var(--muted)}.funnel-item select{min-width:0}
+.explorer{display:flex;flex-direction:column;gap:12px}
+:root[data-theme=dark]{--bg:#12181e;--card:#1b242c;--ink:#e6edf2;--muted:#9aa9b6;--line:#2c3945;--accent-soft:#3a2412;color-scheme:dark}
+[data-theme=dark] .topbar,[data-theme=dark] .app-footer,[data-theme=dark] input,[data-theme=dark] select,[data-theme=dark] .chip,[data-theme=dark] .notice-card,[data-theme=dark] .profile,[data-theme=dark] th,[data-theme=dark] .hero-search,[data-theme=dark] .hero-search button,[data-theme=dark] .topnav{background:var(--card);color:var(--ink)}
+[data-theme=dark] input,[data-theme=dark] select,[data-theme=dark] .chip{border-color:var(--line)}
+[data-theme=dark] .topnav a:hover,[data-theme=dark] .topbar-access:hover{background:#26323c}
+[data-theme=dark] .tabs,[data-theme=dark] .bar-list .track,[data-theme=dark] .year-bar,[data-theme=dark] .badge{background:#26323c}
+[data-theme=dark] .notice,[data-theme=dark] .priority{background:#3a2f12;color:#f5dfa0;border-color:#5b4a1c}
+@media print{.topbar,.app-footer,.no-print,.hero,.profiles,.menu-toggle{display:none!important}body{background:#fff}.notice-card{break-inside:avoid}}

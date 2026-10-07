@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { brl, brlCompact, num, useFetch } from '../lib/api';
+import { daysLeft, useFavorites } from '../lib/tools';
 
 export function Stat({ label, value, hint, tone, loading, onOpen }) {
   const interactive = onOpen ? { onDoubleClick: onOpen, onKeyDown: (e) => { if (e.key === 'Enter') onOpen(); }, tabIndex: 0, role: 'button', title: 'Clique duas vezes (ou Enter) para ver as licitações abertas' } : {};
@@ -135,6 +136,8 @@ export function CityTable({ rows }) {
 
 export function NoticeCard({ item, locked, showStatus = true }) {
   const [open, setOpen] = useState(false);
+  const { favs, toggle } = useFavorites();
+  const left = daysLeft(item.encerramento_propostas);
   const closing = item.encerramento_propostas ? new Date(item.encerramento_propostas) : null;
   const isOpen = closing && closing > new Date();
   return (
@@ -144,6 +147,8 @@ export function NoticeCard({ item, locked, showStatus = true }) {
         {item.exige_porte_me_epp && <span className="badge">Exigência ME/EPP</span>}
         {item.cnae_termos?.length > 0 && <span className="badge cnae" title="Termos do seu CNAE encontrados no objeto">CNAE: {item.cnae_termos.join(', ')}</span>}
         <span className={`badge ${isOpen ? 'good' : ''}`}>{isOpen ? 'Propostas abertas' : 'Fora do prazo / sem prazo'}</span>
+        {left != null && <span className={`badge ${left <= 3 ? 'bad' : ''}`}>{left <= 1 ? 'Encerra hoje/amanhã' : `${left} dias restantes`}</span>}
+        <button type="button" className="star no-print" aria-pressed={Boolean(favs[item.id])} aria-label={favs[item.id] ? 'Remover dos favoritos' : 'Favoritar'} onClick={() => toggle(item)}>{favs[item.id] ? '★' : '☆'}</button>
       </header>
       <h3>{item.objeto || 'Objeto não informado'}</h3>
       <p className="meta">{item.orgao} · {item.municipio || 'CE'} · {item.modalidade}</p>
