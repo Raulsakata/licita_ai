@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+export const API_URL = import.meta.env.VITE_API_URL ?? '';
 
 export async function api(path, { token, method = 'GET', body, signal } = {}) {
   const response = await fetch(`${API_URL}${path}`, {
