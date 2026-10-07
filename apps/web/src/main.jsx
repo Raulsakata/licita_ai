@@ -29,7 +29,7 @@ function App() {
   const route = ROUTES[hash] || 'inicio';
   const [theme, toggleTheme] = useTheme();
   const sync = useFetch('/api/publico/sincronizacao', {});
-  const links = [['#', 'inicio', 'Portal público'], ['#/oportunidades', 'empresa', 'Oportunidades'], ['#/ferramentas', 'ferramentas', 'Ferramentas'], ['#/administrador', 'admin', 'Administrador']];
+  const links = [['#', 'inicio', 'Portal público'], ['#/oportunidades', 'empresa', 'Oportunidades'], ['#/ferramentas', 'ferramentas', 'Ferramentas']];
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -37,7 +37,7 @@ function App() {
         <button type="button" className="menu-toggle" aria-expanded={menuOpen} aria-label="Abrir menu" onClick={() => setMenuOpen(!menuOpen)}>☰</button>
         <nav className={`topnav ${menuOpen ? 'open' : ''}`} aria-label="Principal">{links.map(([href, id, label]) => <a key={id} href={href} className={route === id ? 'active' : ''} aria-current={route === id ? 'page' : undefined}>{label}</a>)}</nav>
         <button type="button" className="theme-toggle" onClick={toggleTheme} aria-label="Alternar modo escuro" title="Modo claro/escuro">{theme === 'dark' ? '☀' : '🌙'}</button>
-        <a className="topbar-access" href="#/oportunidades">Acesso empresa</a>
+        <a className="topbar-access admin-gear" href="#/administrador" title="Administrador" aria-label="Administrador">⚙</a>
       </header>
       <main>
         {route === 'inicio' && <Public />}

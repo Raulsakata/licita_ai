@@ -70,18 +70,16 @@ export default function Public() {
     <>
     <section className="hero">
       <h1>Portal de licitações do Ceará</h1>
+      <div className="hero-buttons">
+        <a className="hero-btn" href="#painel" onClick={(e) => { e.preventDefault(); document.getElementById('painel')?.scrollIntoView({ behavior: 'smooth' }); }}><b>Cidadão</b><span>Painel público, mapa e valores</span></a>
+        <a className="hero-btn" href="#/oportunidades"><b>Empresa</b><span>Oportunidades pelo seu CNAE</span></a>
+      </div>
       <form className="hero-search" role="search" onSubmit={(e) => { e.preventDefault(); setShowOpen(true); }}>
         <input type="search" aria-label="Buscar licitações abertas" placeholder="O que você procura? (objeto, órgão ou município)" value={heroText} onChange={(e) => setHeroText(e.target.value)} />
         <button type="submit" aria-label="Buscar">🔍</button>
       </form>
       {syncLabel && <small aria-live="polite">{syncLabel}{syncTimestamp && ` · ${fmtDateTime(syncTimestamp)}`} · atualização a cada 12 horas</small>}
-    </section>
-    <div className="profiles">
-      <a className="profile" href="#"><h3>Cidadão</h3><p>Painel público com licitações, valores e mapa do Ceará.</p></a>
-      <a className="profile" href="#/oportunidades"><h3>Empresa</h3><p>Para empresas (CNPJ): oportunidades compatíveis com seu CNAE.</p></a>
-      <a className="profile" href="#/administrador"><h3>Administrador</h3><p>Gestão de empresas, fluxo de licitações e registros.</p></a>
-    </div>
-    <h2 className="section-title">Painel</h2>
+    </section>    <h2 className="section-title" id="painel">Painel</h2>
     <div className="page">
       <Card title="Filtros globais"><Filters filters={filters} onChange={setFilters} /></Card>
       {mpeOnly && <PriorityNotice />}

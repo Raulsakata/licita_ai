@@ -186,7 +186,7 @@ async def public_open_notices(municipio: str | None = None, todos: bool = False,
 
 
 @app.get("/api/publico/municipio/{codigo}/licitacoes")
-async def municipality_notices(codigo: str, inicio: str | None = None, fim: str | None = None):
+async def municipality_notices(codigo: str, inicio: str | None = None, fim: str | None = None, somente_mpe: bool = False):
     municipality = resolve_municipality(codigo)
     start, end = resolve_period(inicio, fim)
     try:
@@ -197,15 +197,18 @@ async def municipality_notices(codigo: str, inicio: str | None = None, fim: str 
     except (httpx.HTTPError, RuntimeError) as error:
         raise HTTPException(502, "O PNCP não conseguiu carregar todas as páginas solicitadas. Tente novamente mais tarde.") from error
     now = datetime.now().isoformat()
-    open_items = [item for item in open_items if licitacoes.has_me_epp_signal(item)]
+    if somente_mpe:
+        open_items = [item for item in open_items if licitacoes.has_me_epp_signal(item)]
     open_ids = {item.get("numeroControlePNCP") for item in open_items}
     closed = [
         item for item in period_items
-        if item.get("numeroControlePNCP") not in open_ids and licitacoes.has_me_epp_signal(item) and str(item.get("dataEncerramentoProposta") or "") < now
+        if item.get("numeroControlePNCP") not in open_ids
+        and (not somente_mpe or licitacoes.has_me_epp_signal(item))
+        and (not item.get("dataEncerramentoProposta") or str(item.get("dataEncerramentoProposta")) < now)
     ]
     closed.sort(key=lambda item: str(item.get("dataEncerramentoProposta") or ""), reverse=True)
     return {
-        "municipio": municipality, "data_inicial": start.isoformat(), "data_final": end.isoformat(), "somente_mpe": True,
+        "municipio": municipality, "data_inicial": start.isoformat(), "data_final": end.isoformat(), "somente_mpe": somente_mpe,
         "abertas_total": len(open_items), "abertas": [licitacoes.shape_item(item) for item in open_items],
         "encerradas_total": len(closed), "encerradas": [licitacoes.shape_item(item) for item in closed],
         "consulta_completa": ok and open_ok, "amostra_limitada": not complete or not open_complete,

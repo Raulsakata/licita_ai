@@ -61,25 +61,26 @@ export function CearaMap({ summary, selected, onSelect }) {
 }
 
 export function MunicipalityPanel({ code, name, onClose }) {
-  const [filters, setFilters] = useState(() => ({ ...defaultFilters(), inicio: new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10) }));
-  const [tab, setTab] = useState('abertas');
+  const [filters, setFilters] = useState(() => ({ ...defaultFilters(), inicio: new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10) }));
+  const [tab, setTab] = useState('encerradas');
+  const [onlyMpe, setOnlyMpe] = useState(false);
   const [text, setText] = useState('');
   const ref = useRef(null);
-  const { data, loading, error } = useFetch(`/api/publico/municipio/${code}/licitacoes`, toRange(filters));
+  const { data, loading, error } = useFetch(`/api/publico/municipio/${code}/licitacoes`, { ...toRange(filters), somente_mpe: onlyMpe ? 1 : '' });
   useEffect(() => { ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [code]);
   const list = (data?.[tab] || []).filter((item) => `${item.objeto} ${item.orgao}`.toLowerCase().includes(text.toLowerCase()));
   return (
     <div ref={ref}>
       <Card title={`${name || code} — licitações`} className="muni-panel" aside={<button type="button" className="chip" onClick={onClose}>Fechar ✕</button>}>
-        <PriorityNotice />
         <p className="muted">Abertas: vigentes hoje. Encerradas: com prazo de propostas já vencido, dentro do período selecionado.</p>
         <Filters filters={filters} onChange={setFilters} hideCity />
         <Notice error={error} partial={data?.amostra_limitada} incomplete={data && !data.consulta_completa} />
         <div className="row-gap">
           <Tabs value={tab} onChange={setTab} options={[['abertas', `Abertas (${data ? num(data.abertas_total) : '…'})`], ['encerradas', `Encerradas (${data ? num(data.encerradas_total) : '…'})`]]} />
           <input className="search" type="search" placeholder="Buscar por objeto ou órgão…" value={text} onChange={(e) => setText(e.target.value)} />
+          <label className="check"><input type="checkbox" checked={onlyMpe} onChange={(e) => setOnlyMpe(e.target.checked)} />Somente ME/EPP</label>
         </div>
-        <div className="notice-grid" style={{ opacity: loading ? 0.5 : 1 }}>{list.map((item) => <NoticeCard key={item.id} item={item} showStatus={false} />)}</div>
+        <div style={{ opacity: loading ? 0.5 : 1 }}><NoticeExplorer key={tab} items={list} /></div>
         {!loading && data && !list.length && <p className="empty">Nenhuma licitação {tab === 'abertas' ? 'aberta' : 'encerrada'} para este município e período.</p>}
         {loading && !data && <p className="empty">Carregando licitações…</p>}
       </Card>
