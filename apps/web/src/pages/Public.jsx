@@ -76,12 +76,13 @@ export default function Public() {
         <a className="hero-btn" href="#painel" onClick={(e) => { e.preventDefault(); document.getElementById('painel')?.scrollIntoView({ behavior: 'smooth' }); }}><b>Cidadão</b><span>Painel público, mapa e valores</span></a>
         <a className="hero-btn" href="#/oportunidades"><b>Empresa</b><span>Oportunidades pelo seu CNAE</span></a>
       </div>
-      <form className="hero-search" role="search" onSubmit={(e) => { e.preventDefault(); setShowOpen(true); }}>
+      {syncLabel && <small aria-live="polite">{syncLabel}{syncTimestamp && ` · ${fmtDateTime(syncTimestamp)}`} · atualização a cada 12 horas</small>}
+    </section>
+    <div className="search-band"><form className="hero-search" role="search" onSubmit={(e) => { e.preventDefault(); setShowOpen(true); }}>
         <input type="search" aria-label="Buscar licitações abertas" placeholder="O que você procura? (objeto, órgão ou município)" value={heroText} onChange={(e) => setHeroText(e.target.value)} />
         <button type="submit" aria-label="Buscar">🔍</button>
-      </form>
-      {syncLabel && <small aria-live="polite">{syncLabel}{syncTimestamp && ` · ${fmtDateTime(syncTimestamp)}`} · atualização a cada 12 horas</small>}
-    </section>    <h2 className="section-title" id="painel">Painel</h2>
+      </form></div>
+    <h2 className="section-title" id="painel">Painel</h2>
     <div className="page">
       <Card title="Filtros globais"><Filters filters={filters} onChange={setFilters} /></Card>
       {mpeOnly && <PriorityNotice />}

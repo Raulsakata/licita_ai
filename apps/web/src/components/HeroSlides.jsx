@@ -1,24 +1,31 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { API_URL, useFetch } from '../lib/api';
 
-// Pontos turísticos do Ceará (imagens gravadas no banco) como fundo rotativo do cabeçalho.
+const SLIDES = 12;
+
+// Fundo rotativo com as mesmas fotos de municípios usadas no mapa interativo.
 export default function HeroSlides() {
-  const { data } = useFetch('/api/imagens', { tipo: 'turismo' });
+  const { data } = useFetch('/api/imagens', { tipo: 'cidade' });
   const [index, setIndex] = useState(0);
-  const slides = data || [];
+  const slides = useMemo(() => {
+    const list = [...(data || [])];
+    for (let i = list.length - 1; i > 0; i -= 1) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
+    return list.slice(0, SLIDES);
+  }, [data]);
   useEffect(() => {
     if (slides.length < 2) return undefined;
     const timer = setInterval(() => setIndex((current) => (current + 1) % slides.length), 6000);
     return () => clearInterval(timer);
   }, [slides.length]);
   if (!slides.length) return null;
+  const near = (i) => i === index || i === (index + 1) % slides.length;
   return (
     <div className="hero-slides" aria-hidden="true">
       {slides.map((slide, i) => (
         <div key={slide.key} className={`hero-slide ${i === index ? 'on' : ''}`}
-          style={i === index || i === (index + 1) % slides.length ? { backgroundImage: `url(${API_URL}/api/imagens/${slide.key})` } : undefined} />
+          style={near(i) ? { backgroundImage: `url(${API_URL}/api/imagens/${slide.key})` } : undefined} />
       ))}
-      <span className="hero-credit">{slides[index]?.title}</span>
+      <span className="hero-credit">{slides[index]?.title} · Ceará</span>
     </div>
   );
 }

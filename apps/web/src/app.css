@@ -122,3 +122,10 @@ code{font-size:12px;word-break:break-all}.search{width:100%;max-width:340px}
 .hero-slide.on{opacity:1}.hero-slides::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,#0006,#0008)}
 .hero::before{z-index:1}.hero>*:not(.hero-slides){z-index:2}
 .hero-credit{position:absolute;right:14px;bottom:8px;z-index:3;font-size:12px;color:#fff;text-shadow:0 1px 3px #000}
+.search-band{background:var(--card,#fff);padding:16px 20px;border-bottom:1px solid var(--line,#dde3ea)}
+.search-band .hero-search{max-width:720px;border:2px solid #2da44e;box-shadow:0 2px 8px #0001}
+.rank-list,.deadline-list,.checklist{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.rank-list li{display:grid;grid-template-columns:minmax(120px,1.2fr) 1fr auto;gap:10px;align-items:center;font-size:13px}.rank-list .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rank-list .track{height:8px;background:var(--line);border-radius:4px;overflow:hidden}.rank-list .track i{display:block;height:100%;background:var(--accent)}.rank-list .val{color:var(--muted);white-space:nowrap}
+.deadline-list li{display:grid;grid-template-columns:70px 1fr auto;gap:10px;font-size:13px;align-items:center}.deadline-list small{color:var(--muted)}
+.progress{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-bottom:10px}.progress i{display:block;height:100%;background:var(--good)}

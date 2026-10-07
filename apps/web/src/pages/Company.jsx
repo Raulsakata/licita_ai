@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { api, maskCnpj, num, useFetch } from '../lib/api';
 import { Card, Filters, Notice, NoticeCard, Stat, defaultFilters, toRange } from '../components/ui';
+import CompanyInsights from '../components/company_insights';
 import { LoginForm } from '../components/LoginForm';
 
 function Panel({ session, onLogout }) {
@@ -36,6 +37,7 @@ function Panel({ session, onLogout }) {
         <Stat label="Bloqueadas por porte" value={data ? num(data.total_nao_aptas) : ''} loading={loading} tone={data?.total_nao_aptas ? 'bad' : ''} />
         <Stat label="Fora do seu CNAE (ocultas)" value={data ? num(data.total_incompativeis) : ''} loading={loading} />
       </div>
+      <CompanyInsights items={data?.aptas || []} />
       <Card title="Oportunidades aptas" aside={<div className="row-gap"><label className="check"><input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> Somente com propostas abertas</label></div>}>
         <input className="search" type="search" placeholder="Buscar por objeto, órgão ou município…" value={text} onChange={(e) => setText(e.target.value)} />
         <p className="muted" aria-live="polite">{loading ? 'Atualizando…' : `${num(visible.length)} licitação(ões) exibida(s)`}</p>
