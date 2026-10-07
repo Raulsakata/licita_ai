@@ -86,9 +86,9 @@ export function MunicipalityPanel({ code, name, onClose }) {
   );
 }
 
-export function OpenNoticesDialog({ municipio, scope, mpeOnly, onClose }) {
+export function OpenNoticesDialog({ municipio, scope, mpeOnly, onClose, initialText = '' }) {
   const { data, loading, error } = useFetch('/api/publico/abertos', { municipio, todos: 1, somente_mpe: mpeOnly ? 1 : '' });
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText);
   useEffect(() => { const onKey = (e) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [onClose]);
   const list = (data?.editais || []).filter((item) => `${item.objeto} ${item.orgao} ${item.municipio}`.toLowerCase().includes(text.toLowerCase()));
   return (

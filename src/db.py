@@ -43,7 +43,7 @@ def save_pncp_results(payload: dict, municipality_code: str | None = None) -> bo
     try:
         table = db.schema("licita_ai").table("pncp_opportunities")
         for offset in range(0, len(rows), 250):
-            table.upsert(rows[offset:offset + 250], on_conflict="pncp_id").execute()
+            table.upsert(rows[offset:offset + 250], on_conflict="pncp_id", ignore_duplicates=True).execute()
         return True
     except APIError as error:
         logger.warning("Falha ao salvar oportunidades PNCP no Supabase: %s", error)
@@ -293,7 +293,7 @@ def save_pncp_open_snapshot(items: list[dict]) -> bool:
         })
     try:
         for offset in range(0, len(rows), 250):
-            table.upsert(rows[offset:offset + 250], on_conflict="pncp_id").execute()
+            table.upsert(rows[offset:offset + 250], on_conflict="pncp_id", ignore_duplicates=True).execute()
         return True
     except APIError as error:
         logger.warning("Falha ao salvar snapshot de editais abertos no Supabase: %s", error)

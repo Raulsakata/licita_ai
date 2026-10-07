@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -189,7 +189,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             pncp_sync.licitacoes, "_fetch_modality", AsyncMock(return_value=(1, [item], True, True)),
         ) as fetch_modality:
             total, items, complete, no_failures = await pncp_sync.collect(
-                date(2026, 9, 1), date(2026, 9, 30), modalities=(6,),
+                date(2026, 9, 1), date(2026, 9, 30), modalities=(6,), allow_fetch=True,
             )
 
         fetch_modality.assert_awaited_once()
@@ -226,8 +226,8 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             result = await pncp_sync.run_scheduled_sync()
 
         self.assertEqual(result["status"], "complete")
-        self.assertEqual(collect.await_args.kwargs, {"force_refresh": True})
-        open_fetch.assert_awaited_once_with(None, date.today(), force_refresh=True)
+        self.assertEqual(collect.await_args.kwargs, {"force_refresh": True, "allow_fetch": True})
+        open_fetch.assert_awaited_once_with(None, date.today(), force_refresh=True, allow_fetch=True)
         self.assertEqual((collect.await_args.args[0], collect.await_args.args[1]), (
             date.today() - timedelta(days=pncp_sync.REFRESH_LOOKBACK_DAYS), date.today(),
         ))
@@ -535,7 +535,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             pncp_sync, "load_pncp_open_snapshot", MagicMock(return_value=[{"raw_data": item}]),
         ):
-            total, items, complete, no_failures = await pncp_sync.fetch_open_cached(None, date.today())
+            total, items, complete, no_failures = await pncp_sync.fetch_open_cached(None, date.today(), allow_fetch=True)
 
         fetch.assert_awaited_once()
         self.assertEqual((total, len(items)), (1, 1))
@@ -552,7 +552,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             pncp_sync, "load_pncp_open_snapshot", MagicMock(return_value=[{"raw_data": item}]),
         ):
-            total, items, complete, no_failures = await pncp_sync.fetch_open_cached(None, date.today())
+            total, items, complete, no_failures = await pncp_sync.fetch_open_cached(None, date.today(), allow_fetch=True)
 
         self.assertEqual((total, items), (1, [item]))
         self.assertFalse(complete)

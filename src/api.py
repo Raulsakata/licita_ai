@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from hmac import compare_digest
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 import httpx
 from src import auth, cnae, licitacoes, pncp_sync
 from src.config import settings
@@ -19,10 +20,12 @@ from src.transform import assess_eligibility
 from src.validators import validate_cnpj
 
 MODALIDADE_CODES = {item["codigo"] for item in PNCP_MODALIDADES}
+OPEN_PREVIEW_LIMIT = 30
 PUBLIC_COMPANY_KEYS = COMPANY_PUBLIC_COLUMNS.split(",")
 _pncp_scheduler_task: asyncio.Task | None = None
 
 app = FastAPI(title="Licita AI API", version="0.4.0")
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
     CORSMiddleware, allow_origins=[origin.strip() for origin in settings.frontend_origin.split(",")],
     allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["*"],
@@ -178,7 +181,7 @@ async def public_open_notices(municipio: str | None = None, todos: bool = False,
     return {
         "total": total, "somente_mpe": somente_mpe,
         "consulta_completa": no_failures, "amostra_limitada": not sample_complete,
-        "editais": [licitacoes.shape_item(item) for item in items],
+        "editais": [licitacoes.shape_item(item) for item in (items if todos else items[:OPEN_PREVIEW_LIMIT])],
     }
 
 

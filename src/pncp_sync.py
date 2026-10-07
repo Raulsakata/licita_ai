@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import date, datetime, timedelta, timezone
 from src import licitacoes
 from src.db import (
@@ -10,10 +11,33 @@ from src.db import (
 from src.logger import logger
 
 SYNC_INTERVAL = timedelta(hours=12)
-INITIAL_BACKFILL_DAYS = 7
+INITIAL_BACKFILL_DAYS = 180
 REFRESH_LOOKBACK_DAYS = 30
+READ_CACHE_TTL = 600  # segundos
+_read_cache: dict = {}
+_data_version = 0
 _sync_lock = asyncio.Lock()
 _open_sync_lock = asyncio.Lock()
+
+
+def _cache_get(key):
+    entry = _read_cache.get(key)
+    if entry and entry[0] == _data_version and time.monotonic() - entry[1] < READ_CACHE_TTL:
+        return entry[2]
+    return None
+
+
+def _cache_put(key, value):
+    if len(_read_cache) > 64:
+        _read_cache.clear()
+    _read_cache[key] = (_data_version, time.monotonic(), value)
+    return value
+
+
+def invalidate_read_cache() -> None:
+    global _data_version
+    _data_version += 1
+    _read_cache.clear()
 
 
 def _date(value) -> date:
@@ -63,10 +87,14 @@ def _items_from_rows(rows: list[dict], municipality: str | None, modalities: tup
 
 
 async def _read_cached_period(start: date, end: date, municipality: str | None, modalities: tuple[int, ...]) -> list[dict]:
+    key = ("period", start, end, municipality, modalities)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
     rows = await asyncio.to_thread(load_pncp_results, start, end, municipality)
     if rows is None:
         raise RuntimeError("Não foi possível carregar licitações do Supabase")
-    return _items_from_rows(rows, municipality, modalities)
+    return _cache_put(key, _items_from_rows(rows, municipality, modalities))
 
 
 def _period_is_covered(start: date, end: date, modalities: tuple[int, ...], windows: list[dict]) -> bool:
@@ -82,16 +110,19 @@ async def collect(
     municipality: str | None = None,
     modalities: tuple[int, ...] = licitacoes.DEFAULT_MODALITIES,
     force_refresh: bool = False,
+    allow_fetch: bool = False,
 ) -> tuple[int, list[dict], bool, bool]:
+    """Sem allow_fetch (requisições de usuários) lê apenas o banco; só o sincronizador consulta o PNCP."""
     if get_db() is None:
         return await licitacoes.collect(start, end, municipality, modalities)
 
     windows = await asyncio.to_thread(list_pncp_sync_windows, list(modalities))
     if windows is None:
         raise RuntimeError("Não foi possível consultar a cobertura PNCP no Supabase")
-    if not force_refresh and _period_is_covered(start, end, modalities, windows):
+    covered = _period_is_covered(start, end, modalities, windows)
+    if not allow_fetch or (not force_refresh and covered):
         cached_items = await _read_cached_period(start, end, municipality, modalities)
-        return len(cached_items), cached_items, True, True
+        return len(cached_items), cached_items, covered, True
 
     async with _sync_lock:
         windows = await asyncio.to_thread(list_pncp_sync_windows, list(modalities))
@@ -134,15 +165,31 @@ async def collect(
                         "ends_on": gap_end.isoformat(),
                     })
 
+        invalidate_read_cache()
         items = await _read_cached_period(start, end, municipality, modalities)
         coverage_ok = _period_is_covered(start, end, modalities, windows)
         sample_complete = sample_complete and coverage_ok
         return len(items), items, sample_complete, no_failures
 
 
-async def fetch_open_cached(municipality: str | None, today: date, force_refresh: bool = False) -> tuple[int, list[dict], bool, bool]:
+async def fetch_open_cached(
+    municipality: str | None, today: date, force_refresh: bool = False, allow_fetch: bool = False,
+) -> tuple[int, list[dict], bool, bool]:
     if get_db() is None:
         return await licitacoes.fetch_open(municipality, today)
+
+    key = ("open", municipality, today)
+    if not allow_fetch:
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
+        state = await asyncio.to_thread(get_pncp_open_sync_state)
+        rows = await asyncio.to_thread(load_pncp_open_snapshot, municipality)
+        if rows is None:
+            raise RuntimeError("Não foi possível carregar o snapshot de editais abertos no Supabase")
+        items = [row.get("raw_data") or {} for row in rows]
+        is_complete = (state or {}).get("status") == "complete"
+        return _cache_put(key, (len(items), items, is_complete, is_complete))
 
     async with _open_sync_lock:
         state = await asyncio.to_thread(get_pncp_open_sync_state)
@@ -210,8 +257,10 @@ async def run_scheduled_sync() -> dict:
         await asyncio.to_thread(update_pncp_sync_state, "running", started_at=now.isoformat())
 
     try:
-        total, items, complete, no_failures = await collect(start, end, force_refresh=True)
-        _, open_items, open_complete, open_no_failures = await fetch_open_cached(None, end, force_refresh=True)
+        await collect(end - timedelta(days=INITIAL_BACKFILL_DAYS), end, allow_fetch=True)
+        total, items, complete, no_failures = await collect(start, end, force_refresh=True, allow_fetch=True)
+        _, open_items, open_complete, open_no_failures = await fetch_open_cached(None, end, force_refresh=True, allow_fetch=True)
+        invalidate_read_cache()
         complete = complete and open_complete
         no_failures = no_failures and open_no_failures
         finished_at = datetime.now(timezone.utc).isoformat()

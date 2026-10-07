@@ -42,6 +42,7 @@ function MpeComparison({ initial }) {
 export default function Public() {
   const [filters, setFilters] = useState(defaultFilters());
   const [showOpen, setShowOpen] = useState(false);
+  const [heroText, setHeroText] = useState('');
   const [mapCity, setMapCity] = useState(null);
   const [monthView, setMonthView] = useState('mpe');
   const mpeOnly = Boolean(filters.municipio);
@@ -66,8 +67,22 @@ export default function Public() {
       : sync.data?.updated_at;
 
   return (
+    <>
+    <section className="hero">
+      <h1>Portal de licitações do Ceará</h1>
+      <form className="hero-search" role="search" onSubmit={(e) => { e.preventDefault(); setShowOpen(true); }}>
+        <input type="search" aria-label="Buscar licitações abertas" placeholder="O que você procura? (objeto, órgão ou município)" value={heroText} onChange={(e) => setHeroText(e.target.value)} />
+        <button type="submit" aria-label="Buscar">🔍</button>
+      </form>
+      {syncLabel && <small aria-live="polite">{syncLabel}{syncTimestamp && ` · ${fmtDateTime(syncTimestamp)}`} · atualização a cada 12 horas</small>}
+    </section>
+    <div className="profiles">
+      <a className="profile" href="#"><h3>Cidadão</h3><p>Painel público com licitações, valores e mapa do Ceará.</p></a>
+      <a className="profile" href="#/oportunidades"><h3>Empresa</h3><p>Para empresas (CNPJ): oportunidades compatíveis com seu CNAE.</p></a>
+      <a className="profile" href="#/administrador"><h3>Administrador</h3><p>Gestão de empresas, fluxo de licitações e registros.</p></a>
+    </div>
+    <h2 className="section-title">Painel</h2>
     <div className="page">
-      <header className="page-head public-masthead"><img src="/brasao-ceara.svg" alt="Brasão do Estado do Ceará" /><div><p className="eyebrow">VISÃO PÚBLICA · CEARÁ</p><h1>Licitações no {cityName ? cityName : 'Estado do Ceará'}</h1><p className="muted">Dados sincronizados do PNCP e armazenados no Supabase, restritos aos municípios cearenses.</p>{syncLabel && <p className={`sync-stamp ${syncComplete ? 'ok' : 'warn'}`} aria-live="polite">{syncLabel}{syncTimestamp && ` · ${fmtDateTime(syncTimestamp)}`} · atualização automática a cada 12 horas</p>}</div></header>
       <Card title="Filtros globais"><Filters filters={filters} onChange={setFilters} /></Card>
       {mpeOnly && <PriorityNotice />}
       <Notice error={summary.error} partial={s?.amostra_limitada} incomplete={s && !s.consulta_completa} />
@@ -81,7 +96,7 @@ export default function Public() {
       </div>
       <CearaMap summary={s} selected={mapCity?.code} onSelect={(code, name) => setMapCity({ code, name })} />
       {mapCity && <MunicipalityPanel key={mapCity.code} code={mapCity.code} name={mapCity.name} onClose={() => setMapCity(null)} />}
-      {showOpen && <OpenNoticesDialog municipio={filters.municipio} scope={scope} mpeOnly={mpeOnly} onClose={() => setShowOpen(false)} />}
+      {showOpen && <OpenNoticesDialog initialText={heroText} municipio={filters.municipio} scope={scope} mpeOnly={mpeOnly} onClose={() => setShowOpen(false)} />}
       <div className="grid-2">
         <Card title="Evolução mensal" aside={<Tabs value={monthView} onChange={setMonthView} options={[['mpe', 'Participação MPE (encerradas)'], ['pub', 'Publicações']]} />}>
           {!s ? <p className="empty">{summary.loading ? 'Carregando…' : 'Sem dados.'}</p> : monthView === 'mpe' ? <MpeMonthlyChart rows={s.mpe_mensal} /> : <ColumnChart rows={s.por_mes} labelKey="mes" title="Publicações por mês" />}
@@ -99,5 +114,6 @@ export default function Public() {
         {open.data && !open.data.editais.length && <p className="empty">Nenhum edital aberto para este filtro.</p>}
       </Card>
     </div>
+    </>
   );
 }
