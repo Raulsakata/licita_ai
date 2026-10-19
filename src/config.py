@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     pncp_cache_ttl_seconds: int = 300
     ibge_cache_ttl_seconds: int = 86400
     open_cnpj_cache_ttl_seconds: int = 21600
+    pncp_scrape_user_agent: str = "LicitaAI/0.1 (+https://github.com/Raulsakata/licita_ai)"
+    pncp_scrape_user_agent_pool: str = ""
+    pncp_scrape_timeout_seconds: int = 20
+    pncp_scrape_batch_size: int = 10
+    pncp_scrape_min_interval_seconds: float = 1.0
+    pncp_scrape_poll_seconds: int = 30
+    pncp_scrape_refresh_seconds: int = 39600
 
 
 settings = Settings()

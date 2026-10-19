@@ -10,6 +10,10 @@ O código IBGE de sete posições é a chave territorial usada ao salvar e consu
 
 A API do PNCP exige `codigoModalidadeContratacao` (1 a 13) e `tamanhoPagina` entre 10 e 50 em toda consulta por data de publicação; a tabela de domínio das modalidades é servida por `GET /api/pncp/modalidades` para alimentar o filtro no frontend.
 
+A API HTTP lê do armazenamento as licitações e as referências geográficas consumidas pelo painel público. A sincronização PNCP, a fila de captura HTML e a atualização diária de municípios/malha do IBGE são executadas pelo processo independente `worker.py`; a fila usa `FOR UPDATE SKIP LOCKED` para reservar lotes e permite retentativas sem manter o navegador ou as chamadas de origem dentro de uma requisição do usuário. Mantenha uma réplica do worker enquanto a sincronização periódica e a reserva de fila compartilharem o mesmo processo; escalonar réplicas exige primeiro adicionar um lock distribuído para a sincronização PNCP.
+
+A captura HTML complementa o JSON do PNCP e nunca substitui os campos que não estão disponíveis na página. As respostas permanecem persistidas com hash SHA-256; identificadores de User-Agent devem identificar o coletor e incluir referência de contato, sem tentar contornar controles do portal. Dados de despesas por favorecido e natureza ainda não fazem parte deste modelo: precisam de ingestão e persistência próprias da API oficial do TCE-CE antes de serem exibidos como valores executados.
+
 ## Tabelas
 
 | Tabela | Chave | Uso |

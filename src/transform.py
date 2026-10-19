@@ -1,4 +1,37 @@
+import hashlib
+import json
+
 from src.schemas import Eligibility
+
+
+HTML_FIELD_MAP = {
+    "objeto": "objetoCompra",
+    "informacao_complementar": "informacaoComplementar",
+    "modalidade": "modalidadeNome",
+    "situacao": "situacaoCompraNome",
+}
+
+
+def opportunity_content_hash(raw_data: dict, html_data: dict | None = None) -> str:
+    """Gera um hash estável do conteúdo oficial da API e da página pública."""
+    canonical = json.dumps(
+        {"api": raw_data, "html": html_data or {}},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def merge_html_fields(raw_data: dict, html_data: dict | None) -> dict:
+    """Prioriza os valores visíveis no PNCP sem descartar campos exclusivos da API."""
+    merged = dict(raw_data)
+    for html_key, api_key in HTML_FIELD_MAP.items():
+        value = (html_data or {}).get(html_key)
+        if value:
+            merged[api_key] = value
+    return merged
 
 
 def assess_eligibility(company: dict) -> Eligibility:

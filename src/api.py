@@ -3,20 +3,21 @@ from datetime import date, datetime, timedelta, timezone
 from hmac import compare_digest
 import base64
 import re
+import time
 from functools import lru_cache
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import httpx
-from src import auth, cnae, licitacoes, pncp_sync
+from src import auth, cnae, licitacoes, pncp_sync, suppliers
 from src.config import settings
 from src.db import (
     COMPANY_PUBLIC_COLUMNS, count_rows, create_saved_search, delete_company, delete_saved_search, get_company, get_db,
-    get_media_image, list_companies, list_logs, list_media_images, list_saved_searches, log_event, save_company, update_company,
-    upsert_company_fields,
+    get_geographic_reference, get_media_image, list_companies, list_logs, list_media_images, list_saved_searches,
+    log_event, save_company, update_company, upsert_company_fields,
 )
 from src.domain import PNCP_MODALIDADES
-from src.extract import get_ibge_state_mesh, get_ibge_state_municipalities, get_open_cnpj
+from src.extract import get_open_cnpj
 from src.mappers import normalize_company
 from src.schemas import AdminLogin, CompanyCreate, CompanyLogin, CompanyUpdate, SavedSearchCreate
 from src.transform import assess_eligibility
@@ -25,7 +26,6 @@ from src.validators import validate_cnpj
 MODALIDADE_CODES = {item["codigo"] for item in PNCP_MODALIDADES}
 OPEN_PREVIEW_LIMIT = 30
 PUBLIC_COMPANY_KEYS = COMPANY_PUBLIC_COLUMNS.split(",")
-_pncp_scheduler_task: asyncio.Task | None = None
 
 app = FastAPI(title="Licita AI API", version="0.4.0")
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -33,25 +33,6 @@ app.add_middleware(
     CORSMiddleware, allow_origins=[origin.strip() for origin in settings.frontend_origin.split(",")],
     allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def start_pncp_scheduler():
-    global _pncp_scheduler_task
-    if get_db() and (_pncp_scheduler_task is None or _pncp_scheduler_task.done()):
-        _pncp_scheduler_task = asyncio.create_task(pncp_sync.scheduler_loop())
-
-
-@app.on_event("shutdown")
-async def stop_pncp_scheduler():
-    global _pncp_scheduler_task
-    if _pncp_scheduler_task and not _pncp_scheduler_task.done():
-        _pncp_scheduler_task.cancel()
-        try:
-            await _pncp_scheduler_task
-        except asyncio.CancelledError:
-            pass
-    _pncp_scheduler_task = None
 
 
 def resolve_period(inicio: str | None, fim: str | None) -> tuple[date, date]:
@@ -118,19 +99,19 @@ def saved_searches_delete(search_id: str, _: dict = Depends(auth.require_admin))
 # ---------- Geografia (somente Ceará) ----------
 
 @app.get("/api/geografia/municipios")
-async def ceara_municipalities():
-    try:
-        return await get_ibge_state_municipalities(int(licitacoes.IBGE_UF_CODE))
-    except httpx.HTTPError as error:
-        raise HTTPException(502, "Falha ao consultar o IBGE") from error
+def ceara_municipalities():
+    reference = get_geographic_reference("ceara_municipalities")
+    if reference is None:
+        raise HTTPException(503, "Referência de municípios indisponível no banco; aguarde a sincronização.")
+    return reference["payload"]
 
 
 @app.get("/api/geografia/mapa")
-async def ceara_map():
-    try:
-        return await get_ibge_state_mesh(int(licitacoes.IBGE_UF_CODE))
-    except httpx.HTTPError as error:
-        raise HTTPException(502, "Falha ao consultar o IBGE") from error
+def ceara_map():
+    reference = get_geographic_reference("ceara_map")
+    if reference is None:
+        raise HTTPException(503, "Referência cartográfica indisponível no banco; aguarde a sincronização.")
+    return reference["payload"]
 
 
 # ---------- Imagens (gravadas no banco por scripts/fetch_images.py) ----------
@@ -178,6 +159,19 @@ async def public_summary(municipio: str | None = None, inicio: str | None = None
         return await build_summary(start, end, resolve_municipality(municipio), only_mpe=somente_mpe)
     except (httpx.HTTPError, RuntimeError) as error:
         raise HTTPException(502, "O PNCP não conseguiu carregar todas as páginas solicitadas. Tente novamente mais tarde.") from error
+
+
+# Estoque aproximado de empresas no Ceará (referência ilustrativa, não oficial): exigiria base completa da Receita Federal.
+MPE_CE_REFERENCIA = {"micro": 520000, "pequena": 42000}
+_mpe_cache: dict = {"at": 0.0, "data": None}
+
+
+@app.get("/api/publico/mpe-ceara")
+async def public_mpe_ceara():
+    if _mpe_cache["data"] is None or time.time() - _mpe_cache["at"] > 600:
+        data = await asyncio.to_thread(suppliers.participation)
+        _mpe_cache.update(at=time.time(), data=data)
+    return {**(_mpe_cache["data"] or {}), "referencia_existentes": MPE_CE_REFERENCIA, "referencia_ilustrativa": True}
 
 
 @app.get("/api/publico/sincronizacao")

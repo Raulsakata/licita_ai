@@ -1,9 +1,10 @@
 import asyncio
 import time
 from datetime import date, datetime, timedelta, timezone
-from src import licitacoes
+from fastapi import HTTPException
+from src import licitacoes, suppliers
 from src.db import (
-    get_db, get_pncp_open_sync_state, get_pncp_sync_state,
+    enqueue_pncp_html_scrapes, get_db, get_pncp_open_sync_state, get_pncp_sync_state,
     list_pncp_sync_windows, load_pncp_open_snapshot, load_pncp_results,
     save_pncp_open_snapshot, save_pncp_results, save_pncp_sync_window,
     update_pncp_open_sync_state, update_pncp_sync_state,
@@ -114,7 +115,7 @@ async def collect(
 ) -> tuple[int, list[dict], bool, bool]:
     """Sem allow_fetch (requisições de usuários) lê apenas o banco; só o sincronizador consulta o PNCP."""
     if get_db() is None:
-        return await licitacoes.collect(start, end, municipality, modalities)
+        raise HTTPException(503, "Supabase indisponível; licitações são servidas somente a partir do banco.")
 
     windows = await asyncio.to_thread(list_pncp_sync_windows, list(modalities))
     if windows is None:
@@ -152,6 +153,11 @@ async def collect(
                     sample_complete = False
                     no_failures = no_failures and succeeded
                     continue
+                queued = await asyncio.to_thread(enqueue_pncp_html_scrapes, ceara_items)
+                if not queued:
+                    sample_complete = False
+                    no_failures = False
+                    continue
 
                 window_saved = await asyncio.to_thread(
                     save_pncp_sync_window, modality, gap_start, gap_end, total, len(ceara_items),
@@ -176,7 +182,7 @@ async def fetch_open_cached(
     municipality: str | None, today: date, force_refresh: bool = False, allow_fetch: bool = False,
 ) -> tuple[int, list[dict], bool, bool]:
     if get_db() is None:
-        return await licitacoes.fetch_open(municipality, today)
+        raise HTTPException(503, "Supabase indisponível; licitações são servidas somente a partir do banco.")
 
     key = ("open", municipality, today)
     if not allow_fetch:
@@ -216,6 +222,8 @@ async def fetch_open_cached(
             return len(stale_items), stale_items, False, False
 
         saved = await asyncio.to_thread(save_pncp_open_snapshot, fetched)
+        queued = await asyncio.to_thread(enqueue_pncp_html_scrapes, fetched) if saved else False
+        saved = saved and queued
         is_complete = complete and no_failures and saved
         completed_at = datetime.now(timezone.utc).isoformat()
         await asyncio.to_thread(
@@ -271,7 +279,16 @@ async def run_scheduled_sync() -> dict:
             completed_at=finished_at if status == "complete" else None, error=error,
         )
         logger.info("Sincronização PNCP %s: %s registros (%s..%s)", status, total, start, end)
-        return {"status": status, "total": total, "loaded": len(items), "started_at": now.isoformat(), "completed_at": finished_at}
+        try:
+            result = await asyncio.to_thread(suppliers.sync)
+            logger.info("Fornecedores ME/EPP: %s", result)
+        except Exception:
+            logger.exception("Falha ao atualizar fornecedores ME/EPP")
+        return {
+            "status": status, "total": total, "loaded": len(items),
+            "started_at": now.isoformat(),
+            "completed_at": finished_at,
+        }
     except Exception as error:
         finished_at = datetime.now(timezone.utc).isoformat()
         await asyncio.to_thread(

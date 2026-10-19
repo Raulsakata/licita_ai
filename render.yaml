@@ -25,6 +25,24 @@ services:
       - key: PNCP_SYNC_SECRET
         sync: false
 
+  - type: worker
+    name: licita-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python worker.py
+    envVars:
+      - key: PNCP_BASE_URL
+        value: https://pncp.gov.br/api/consulta/v1
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: PNCP_SYNC_SECRET
+        sync: false
+      - key: PNCP_SCRAPE_USER_AGENT_POOL
+        value: LicitaAI/0.1 (+https://github.com/Raulsakata/licita_ai; channel=sync)|LicitaAI/0.1 (+https://github.com/Raulsakata/licita_ai; channel=scrape)
+
   - type: web
     name: licita-web
     runtime: static

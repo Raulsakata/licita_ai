@@ -15,4 +15,4 @@ where table_schema = 'licita_ai'
 order by table_name;
 ```
 
-Devem existir: `companies`, `eligibility_assessments`, `pncp_opportunities` e `saved_searches`.
+Devem existir, entre outras tabelas: `companies`, `eligibility_assessments`, `pncp_opportunities`, `saved_searches`, `pncp_html_scrape_queue` e `geographic_reference`.

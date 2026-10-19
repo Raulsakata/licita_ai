@@ -6,6 +6,7 @@ from postgrest.exceptions import APIError
 from supabase import create_client, Client
 from src.config import settings
 from src.logger import logger
+from src.transform import opportunity_content_hash
 
 
 @lru_cache
@@ -42,11 +43,60 @@ def save_pncp_results(payload: dict, municipality_code: str | None = None) -> bo
         return True
     try:
         table = db.schema("licita_ai").table("pncp_opportunities")
+        changed_rows = []
         for offset in range(0, len(rows), 250):
-            table.upsert(rows[offset:offset + 250], on_conflict="pncp_id", ignore_duplicates=True).execute()
+            batch = rows[offset:offset + 250]
+            ids = [row["pncp_id"] for row in batch]
+            existing = table.select("pncp_id,content_hash,html_data").in_("pncp_id", ids).execute().data or []
+            existing_by_id = {row["pncp_id"]: row for row in existing}
+            for row in batch:
+                previous = existing_by_id.get(row["pncp_id"], {})
+                html_data = previous.get("html_data") or {}
+                raw_data = row["raw_data"]
+                content_hash = opportunity_content_hash(raw_data, html_data)
+                if previous.get("content_hash") == content_hash:
+                    continue
+                row.update({
+                    "html_data": html_data,
+                    "content_hash": content_hash,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+                changed_rows.append(row)
+        for offset in range(0, len(changed_rows), 250):
+            table.upsert(changed_rows[offset:offset + 250], on_conflict="pncp_id").execute()
         return True
     except APIError as error:
         logger.warning("Falha ao salvar oportunidades PNCP no Supabase: %s", error)
+        return False
+
+
+def get_geographic_reference(reference_key: str) -> dict | None:
+    """Carrega do Supabase uma referência geográfica sincronizada pelo worker."""
+    table = _table("geographic_reference")
+    if table is None:
+        return None
+    try:
+        result = table.select("payload,fetched_at").eq("reference_key", reference_key).limit(1).execute()
+        return result.data[0] if result.data else None
+    except APIError as error:
+        logger.warning("Falha ao carregar referência geográfica %s: %s", reference_key, error)
+        return None
+
+
+def save_geographic_reference(reference_key: str, payload: dict | list) -> bool:
+    """Persiste as referências IBGE para que o painel público não dependa do IBGE em tempo real."""
+    table = _table("geographic_reference")
+    if table is None:
+        return False
+    try:
+        table.upsert({
+            "reference_key": reference_key,
+            "payload": payload,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="reference_key").execute()
+        return True
+    except APIError as error:
+        logger.warning("Falha ao persistir referência geográfica %s: %s", reference_key, error)
         return False
 
 
@@ -200,12 +250,15 @@ def load_pncp_results(start: date, end: date, municipality_code: str | None = No
         page_size = 1000
         end_exclusive = (end + timedelta(days=1)).isoformat()
         while True:
-            query = table.select("pncp_id,municipality_ibge_code,uf,publication_date,raw_data")
+            query = table.select("pncp_id,municipality_ibge_code,uf,publication_date,raw_data,html_data")
             query = query.gte("publication_date", start.isoformat()).lt("publication_date", end_exclusive)
             query = query.eq("uf", "CE")
             if municipality_code:
                 query = query.eq("municipality_ibge_code", municipality_code)
             page = query.order("publication_date").range(offset, offset + page_size - 1).execute().data or []
+            from src.transform import merge_html_fields
+            for row in page:
+                row["raw_data"] = merge_html_fields(row.get("raw_data") or {}, row.get("html_data"))
             rows.extend(page)
             if len(page) < page_size:
                 return rows
@@ -292,8 +345,26 @@ def save_pncp_open_snapshot(items: list[dict]) -> bool:
             "raw_data": item,
         })
     try:
-        for offset in range(0, len(rows), 250):
-            table.upsert(rows[offset:offset + 250], on_conflict="pncp_id", ignore_duplicates=True).execute()
+        existing_by_id = {}
+        ids = [row["pncp_id"] for row in rows]
+        for offset in range(0, len(ids), 250):
+            page = table.select("pncp_id,content_hash,html_data").in_("pncp_id", ids[offset:offset + 250]).execute().data or []
+            existing_by_id.update({row["pncp_id"]: row for row in page})
+        changed_rows = []
+        for row in rows:
+            previous = existing_by_id.get(row["pncp_id"], {})
+            html_data = previous.get("html_data") or {}
+            content_hash = opportunity_content_hash(row["raw_data"], html_data)
+            if previous.get("content_hash") == content_hash:
+                continue
+            row.update({
+                "html_data": html_data,
+                "content_hash": content_hash,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            changed_rows.append(row)
+        for offset in range(0, len(changed_rows), 250):
+            table.upsert(changed_rows[offset:offset + 250], on_conflict="pncp_id").execute()
         return True
     except APIError as error:
         logger.warning("Falha ao salvar snapshot de editais abertos no Supabase: %s", error)
@@ -317,10 +388,13 @@ def load_pncp_open_snapshot(municipality_code: str | None = None) -> list[dict] 
         rows, offset, page_size = [], 0, 1000
         now = datetime.now(timezone.utc).isoformat()
         while True:
-            query = table.select("pncp_id,municipality_ibge_code,proposal_end,raw_data").eq("uf", "CE").gt("proposal_end", now)
+            query = table.select("pncp_id,municipality_ibge_code,proposal_end,raw_data,html_data").eq("uf", "CE").gt("proposal_end", now)
             if municipality_code:
                 query = query.eq("municipality_ibge_code", municipality_code)
             page = query.order("proposal_end").range(offset, offset + page_size - 1).execute().data or []
+            from src.transform import merge_html_fields
+            for row in page:
+                row["raw_data"] = merge_html_fields(row.get("raw_data") or {}, row.get("html_data"))
             rows.extend(page)
             if len(page) < page_size:
                 return rows
@@ -328,6 +402,171 @@ def load_pncp_open_snapshot(municipality_code: str | None = None) -> list[dict] 
     except APIError as error:
         logger.warning("Falha ao carregar snapshot de editais abertos: %s", error)
         return None
+
+
+def _pncp_detail_page_url(item: dict) -> str | None:
+    organ = item.get("orgaoEntidade") or {}
+    cnpj = "".join(character for character in str(organ.get("cnpj") or "") if character.isdigit())
+    year = str(item.get("anoCompra") or "")
+    sequence = str(item.get("sequencialCompra") or "")
+    if len(cnpj) != 14 or not year.isdigit() or len(year) != 4 or not sequence.isdigit():
+        return None
+    return f"https://pncp.gov.br/app/editais/{cnpj}/{year}/{sequence}"
+
+
+def enqueue_pncp_html_scrapes(items: list[dict]) -> bool:
+    db = get_db()
+    if not db:
+        return False
+    entries = []
+    for item in items:
+        pncp_id = str(item.get("numeroControlePNCP") or "")
+        page_url = _pncp_detail_page_url(item)
+        if not pncp_id or not page_url:
+            logger.warning("PNCP sem dados para gerar URL de scraping; id=%s", pncp_id or "ausente")
+            continue
+        entries.append({
+            "pncp_id": pncp_id,
+            "page_url": page_url,
+            "source_hash": opportunity_content_hash(item),
+        })
+    if not entries:
+        return True
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    cutoff = now - timedelta(seconds=settings.pncp_scrape_refresh_seconds)
+    try:
+        queue = db.schema("licita_ai").table("pncp_html_scrape_queue")
+        pending = []
+        for offset in range(0, len(entries), 250):
+            batch = entries[offset:offset + 250]
+            existing = queue.select(
+                "pncp_id,source_hash,status,attempts,next_attempt_at,scraped_at",
+            ).in_("pncp_id", [entry["pncp_id"] for entry in batch]).execute().data or []
+            existing_by_id = {row["pncp_id"]: row for row in existing}
+            for entry in batch:
+                previous = existing_by_id.get(entry["pncp_id"], {})
+                same_source = previous.get("source_hash") == entry["source_hash"]
+                status = previous.get("status")
+                if same_source and status in {"pending", "running"}:
+                    continue
+                if same_source and status == "complete":
+                    scraped_at = previous.get("scraped_at")
+                    try:
+                        scraped = datetime.fromisoformat(str(scraped_at).replace("Z", "+00:00"))
+                        if scraped.tzinfo is None:
+                            scraped = scraped.replace(tzinfo=timezone.utc)
+                        if scraped >= cutoff:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                if same_source and status == "failed":
+                    retry_at = previous.get("next_attempt_at")
+                    try:
+                        retry = datetime.fromisoformat(str(retry_at).replace("Z", "+00:00"))
+                        if retry.tzinfo is None:
+                            retry = retry.replace(tzinfo=timezone.utc)
+                        if retry > now:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                pending.append({
+                    **entry,
+                    "status": "pending",
+                    "attempts": previous.get("attempts", 0) if same_source else 0,
+                    "next_attempt_at": now_iso,
+                    "last_error": None,
+                    "updated_at": now_iso,
+                })
+        for offset in range(0, len(pending), 250):
+            queue.upsert(pending[offset:offset + 250], on_conflict="pncp_id").execute()
+        return True
+    except APIError as error:
+        logger.warning("Falha ao enfileirar páginas PNCP para scraping: %s", error)
+        return False
+
+
+def claim_pncp_html_scrapes(batch_size: int) -> list[dict] | None:
+    db = get_db()
+    if not db:
+        return None
+    try:
+        result = db.schema("licita_ai").rpc(
+            "claim_pncp_html_scrapes", {"batch_size": batch_size},
+        ).execute()
+        return result.data or []
+    except APIError as error:
+        logger.warning("Falha ao reservar páginas PNCP para scraping: %s", error)
+        return None
+
+
+def save_pncp_html_capture(pncp_id: str, page_url: str, html_data: dict) -> bool:
+    db = get_db()
+    if not db:
+        return False
+    captured_at = datetime.now(timezone.utc).isoformat()
+    updated = False
+    try:
+        for table_name in ("pncp_opportunities", "pncp_open_opportunities"):
+            table = db.schema("licita_ai").table(table_name)
+            result = table.select("raw_data").eq("pncp_id", pncp_id).limit(1).execute()
+            records = result.data or []
+            if not records:
+                continue
+            raw_data = records[0].get("raw_data") or {}
+            table.update({
+                "html_data": html_data,
+                "content_hash": opportunity_content_hash(raw_data, html_data),
+                "source_url": page_url,
+                "scraped_at": captured_at,
+                "updated_at": captured_at,
+            }).eq("pncp_id", pncp_id).execute()
+            updated = True
+        return updated
+    except APIError as error:
+        logger.warning("Falha ao persistir captura HTML do PNCP id=%s: %s", pncp_id, error)
+        return False
+
+
+def mark_pncp_html_scrape_complete(pncp_id: str) -> bool:
+    table = _table("pncp_html_scrape_queue")
+    if table is None:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        table.update({
+            "status": "complete",
+            "scraped_at": now,
+            "last_error": None,
+            "updated_at": now,
+        }).eq("pncp_id", pncp_id).execute()
+        return True
+    except APIError as error:
+        logger.warning("Falha ao concluir captura HTML do PNCP id=%s: %s", pncp_id, error)
+        return False
+
+
+def mark_pncp_html_scrape_failed(job: dict, error_message: str) -> bool:
+    table = _table("pncp_html_scrape_queue")
+    if table is None:
+        return False
+    attempts = int(job.get("attempts") or 0) + 1
+    now = datetime.now(timezone.utc)
+    status = "failed" if attempts < 5 else "dead"
+    retry_at = now + timedelta(seconds=min(60 * (2 ** attempts), 3600))
+    try:
+        table.update({
+            "status": status,
+            "attempts": attempts,
+            "next_attempt_at": retry_at.isoformat(),
+            "last_error": error_message[:300],
+            "updated_at": now.isoformat(),
+        }).eq("pncp_id", job["pncp_id"]).execute()
+        return True
+    except APIError as error:
+        logger.warning("Falha ao registrar erro de scraping PNCP id=%s: %s", job.get("pncp_id"), error)
+        return False
 
 
 def get_pncp_open_sync_state() -> dict | None:

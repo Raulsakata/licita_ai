@@ -11,10 +11,12 @@ import src.auth as auth
 import src.cnae as cnae
 import src.licitacoes as licitacoes
 import src.pncp_sync as pncp_sync
+import src.pncp_scrape as pncp_scrape
 import src.db as db
 import src.extract as extract
+import worker
 from src.schemas import Eligibility
-from src.transform import assess_eligibility, normalize_opportunity
+from src.transform import assess_eligibility, normalize_opportunity, opportunity_content_hash
 
 
 class FakeResponse:
@@ -98,6 +100,38 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sleep.await_count, 2)
         self.assertTrue(all(abs(call.args[0] - 5.0) < 0.02 for call in sleep.await_args_list))
 
+    def test_scrape_user_agent_rotation_uses_configured_agents(self):
+        with patch.object(pncp_scrape.settings, "pncp_scrape_user_agent_pool", "LicitaAI/sync|LicitaAI/scrape"), patch.object(
+            pncp_scrape, "_user_agent_index", 0,
+        ):
+            first = pncp_scrape._next_user_agent()
+            second = pncp_scrape._next_user_agent()
+            third = pncp_scrape._next_user_agent()
+
+        self.assertEqual((first, second, third), ("LicitaAI/sync", "LicitaAI/scrape", "LicitaAI/sync"))
+
+    def test_scrape_visible_fields_check_identity_and_required_object(self):
+        page_text = "\n".join([
+            "Id contratação PNCP: CE-123",
+            "Objeto: Reforma de unidade escolar",
+            "Modalidade da contratação: Pregão",
+        ])
+
+        fields = pncp_scrape.extract_visible_fields(page_text, "CE-123")
+
+        self.assertEqual(fields["objeto"], "Reforma de unidade escolar")
+        self.assertEqual(fields["modalidade"], "Pregão")
+        with self.assertRaises(pncp_scrape.HtmlCaptureError):
+            pncp_scrape.extract_visible_fields(page_text, "CE-456")
+
+    def test_opportunity_hash_is_stable_and_tracks_content_changes(self):
+        original = {"objetoCompra": "Reforma", "valorTotalEstimado": 100}
+        reordered = {"valorTotalEstimado": 100, "objetoCompra": "Reforma"}
+        changed = {"objetoCompra": "Reforma", "valorTotalEstimado": 101}
+
+        self.assertEqual(opportunity_content_hash(original), opportunity_content_hash(reordered))
+        self.assertNotEqual(opportunity_content_hash(original), opportunity_content_hash(changed))
+
     async def test_open_cnpj_and_ibge_use_shared_http_adapter(self):
         client = FakeClient([
             FakeResponse(200, {"cnpj": "11222333000181"}),
@@ -115,6 +149,43 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/regioes", client.urls[1])
         self.assertIn("/regioes/2/municipios", client.urls[2])
 
+    def test_public_geography_routes_read_supabase_without_calling_ibge(self):
+        municipalities = [{"id": 2300101, "nome": "Abaiara"}]
+        mesh = {"type": "FeatureCollection", "features": []}
+        with patch.object(api, "get_geographic_reference", side_effect=[
+            {"payload": municipalities}, {"payload": mesh},
+        ]), patch.object(extract, "get_ibge_state_municipalities", AsyncMock()) as city_fetch, patch.object(
+            extract, "get_ibge_state_mesh", AsyncMock(),
+        ) as mesh_fetch:
+            self.assertEqual(api.ceara_municipalities(), municipalities)
+            self.assertEqual(api.ceara_map(), mesh)
+
+        city_fetch.assert_not_awaited()
+        mesh_fetch.assert_not_awaited()
+
+    def test_public_geography_routes_report_missing_database_reference(self):
+        with patch.object(api, "get_geographic_reference", return_value=None):
+            with self.assertRaises(HTTPException) as raised:
+                api.ceara_municipalities()
+
+        self.assertEqual(raised.exception.status_code, 503)
+
+    async def test_worker_persists_ibge_references_for_database_only_reads(self):
+        with patch.object(worker, "get_geographic_reference", MagicMock(return_value=None)), patch.object(
+            worker, "save_geographic_reference", MagicMock(return_value=True),
+        ) as save_reference, patch.object(
+            extract, "get_ibge_state_municipalities", AsyncMock(return_value=[{"id": 2300101}]),
+        ), patch.object(
+            extract, "get_ibge_state_mesh", AsyncMock(return_value={"type": "FeatureCollection"}),
+        ):
+            await worker.refresh_geographic_references()
+
+        self.assertEqual(save_reference.call_count, 2)
+        self.assertEqual(
+            {call.args[0] for call in save_reference.call_args_list},
+            {"ceara_municipalities", "ceara_map"},
+        )
+
     def test_supabase_prefers_server_secret_key(self):
         db.get_db.cache_clear()
         try:
@@ -124,18 +195,27 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             db.get_db.cache_clear()
 
-    async def test_public_summary_queries_only_ceara(self):
+    async def test_public_summary_requires_database_without_fetching_pncp(self):
+        pncp = AsyncMock()
+        with patch.object(pncp_sync, "get_db", MagicMock(return_value=None)), patch.object(
+            licitacoes, "get_pncp_contracts", pncp,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await api.public_summary(None, "2026-09-01", "2026-09-30")
+
+        self.assertEqual(raised.exception.status_code, 503)
+        pncp.assert_not_awaited()
+
+    async def test_public_summary_summarizes_cached_ceara_records(self):
         item = {
             "numeroControlePNCP": "1-1-1", "objetoCompra": "Cota reservada para microempresa", "valorTotalEstimado": 1250,
             "dataPublicacaoPncp": "2026-09-10T10:00:00", "modalidadeNome": "Pregão - Eletrônico",
             "unidadeOrgao": {"ufSigla": "CE", "municipioNome": "Fortaleza", "codigoIbge": "2304400"},
         }
-        foreign = {**item, "numeroControlePNCP": "2-2-2", "unidadeOrgao": {"ufSigla": "BA", "municipioNome": "Salvador"}}
-        pncp = AsyncMock(return_value={"totalRegistros": 2, "totalPaginas": 1, "data": [item, foreign]})
-        with patch.object(pncp_sync, "get_db", MagicMock(return_value=None)), patch.object(licitacoes, "get_pncp_contracts", pncp):
+        with patch.object(pncp_sync, "collect", AsyncMock(return_value=(1, [item], True, True))) as collect:
             summary = await api.public_summary(None, "2026-09-01", "2026-09-30")
-        params = [call.args[0] for call in pncp.await_args_list]
-        self.assertTrue(all(p["uf"] == "CE" for p in params))
+
+        collect.assert_awaited_once()
         self.assertEqual(summary["quantidade_amostra"], 1)
         self.assertEqual(summary["valor_total"], 1250)
         self.assertEqual(summary["por_municipio"][0]["municipio"], "Fortaleza")
@@ -222,7 +302,9 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             pncp_sync, "collect", AsyncMock(return_value=(1, [{"id": "cached"}], True, True)),
         ) as collect, patch.object(
             pncp_sync, "fetch_open_cached", AsyncMock(return_value=(1, [], True, True)),
-        ) as open_fetch:
+        ) as open_fetch, patch.object(
+            pncp_sync.suppliers, "sync", MagicMock(return_value={"status": "ok"}),
+        ):
             result = await pncp_sync.run_scheduled_sync()
 
         self.assertEqual(result["status"], "complete")
@@ -281,8 +363,9 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         open_item = {"numeroControlePNCP": "1-1-1", "objetoCompra": "Aquisição de gás de cozinha GLP", "unidadeOrgao": {"ufSigla": "CE"}}
         unrelated = {"numeroControlePNCP": "3-3-3", "objetoCompra": "Aquisição de material de escritório", "unidadeOrgao": {"ufSigla": "CE"}}
         restricted = {"numeroControlePNCP": "2-2-2", "objetoCompra": "Gás - exclusiva para ME e EPP", "unidadeOrgao": {"ufSigla": "CE"}}
-        pncp = AsyncMock(return_value={"totalRegistros": 3, "totalPaginas": 1, "data": [open_item, restricted, unrelated]})
-        with patch.object(api, "get_company", MagicMock(return_value=row)), patch.object(pncp_sync, "get_db", MagicMock(return_value=None)), patch.object(licitacoes, "get_pncp_contracts", pncp):
+        with patch.object(api, "get_company", MagicMock(return_value=row)), patch.object(
+            pncp_sync, "collect", AsyncMock(return_value=(3, [open_item, restricted, unrelated], True, True)),
+        ):
             result = await api.company_opportunities(None, "2026-09-01", "2026-09-30", 6, {"sub": row["cnpj"], "role": "empresa"})
         self.assertEqual([i["id"] for i in result["aptas"]], ["1-1-1"])
         self.assertEqual(result["total_incompativeis"], 1)

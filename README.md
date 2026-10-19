@@ -16,10 +16,10 @@ Pré-requisitos: Python 3.12+ e Node.js 20+.
 1. Copie `.env.example` para `.env` e configure `SUPABASE_URL` e `SUPABASE_SECRET_KEY` somente no backend. Não use `VITE_` em variáveis secretas.
 2. Execute `python -m venv .venv` e ative o ambiente virtual.
 3. Execute `pip install -r requirements.txt`; em outro terminal, execute `npm install`.
-4. Execute `python main.py` e, em outro terminal, `npm run dev -w @licita/web`.
+4. Execute `python main.py` para a API, `python worker.py` em outro terminal para as sincronizações em segundo plano e `npm run dev -w @licita/web` para o frontend.
 5. Abra `http://localhost:5173`.
 
-Alternativamente, com Docker: `docker compose up --build`. A API fica em `http://localhost:3000` e o web em `http://localhost:8080`.
+Alternativamente, com Docker: `docker compose up --build`. A API fica em `http://localhost:3000`, o web em `http://localhost:8080` e o serviço `worker` executa sincronizações e capturas fora das requisições HTTP.
 
 ## Supabase
 
@@ -28,6 +28,8 @@ Crie um projeto no Supabase e execute, em ordem, todos os arquivos em `supabase/
 As consultas ao PNCP são persistidas em `licita_ai.pncp_opportunities`. A rota `GET /api/empresas/{cnpj}/elegibilidade` consulta o OpenCNPJ, persiste o cadastro e busca propostas abertas nas nove UFs do Nordeste. A avaliação é indicativa: porte, natureza jurídica e situação cadastral não substituem a conferência do objeto social, requisitos e edital.
 
 As respostas públicas do PNCP ficam em cache em memória por 5 minutos, as do OpenCNPJ por 6 horas e as do IBGE por 24 horas. Chamadas externas têm timeout e repetição limitada para `429`, erros `5xx` e falhas de transporte. Ajuste TTLs e tentativas pelas variáveis em `.env.example`. O cache é local ao processo e não substitui um cache compartilhado em deploy com múltiplas instâncias.
+
+O serviço `worker` separado executa a sincronização do PNCP, consome a fila persistente de capturas HTML e mantém nomes/malha municipal do IBGE no Supabase, sem iniciar essas rotinas junto ao ciclo de vida da API HTTP. Configure `PNCP_SCRAPE_USER_AGENT_POOL` com variações identificáveis do coletor, separadas por `|`; a rotação não deve ser usada para contornar bloqueios, limites ou controles dos portais. A fila, as capturas e as referências geográficas usam o schema `licita_ai` e as migrações `0011_pncp_html_capture.sql` e `0013_geographic_reference.sql`.
 
 O painel conta Pregões Eletrônicos publicados no último mês. O valor associado a ME/EPP é uma estimativa parcial baseada em até 50 registros por UF com menção textual explícita; não representa o valor total oficial de todas as cotas ou itens reservados.
 
