@@ -14,6 +14,8 @@ A API HTTP lê do armazenamento as licitações e as referências geográficas c
 
 A captura HTML complementa o JSON do PNCP e nunca substitui os campos que não estão disponíveis na página. As respostas permanecem persistidas com hash SHA-256; identificadores de User-Agent devem identificar o coletor e incluir referência de contato, sem tentar contornar controles do portal. Dados de despesas por favorecido e natureza ainda não fazem parte deste modelo: precisam de ingestão e persistência próprias da API oficial do TCE-CE antes de serem exibidos como valores executados.
 
+Para os relatórios anuais de compras por natureza (filtro de município/ano do painel público), o worker mantém uma fila dedicada de sincronização (`licita_ai.tce_sync_requests`). Cada item da fila busca no TCE-CE as liquidações (`liquidacoes`), relaciona os empenhos (`notas_empenhos`) para recuperar CNPJ do credor e elemento da despesa, classifica porte via cadastro CNPJ e grava os agregados por município/ano e por natureza em tabelas próprias (`licita_ai.tce_expense_municipality_year`, `licita_ai.tce_expense_nature_year`). A API pública lê exclusivamente essas tabelas.
+
 ## Tabelas
 
 | Tabela | Chave | Uso |
@@ -22,6 +24,9 @@ A captura HTML complementa o JSON do PNCP e nunca substitui os campos que não e
 | `licita_ai.eligibility_assessments` | `id` | Histórico da regra indicativa ME/EPP |
 | `licita_ai.pncp_opportunities` | `pncp_id` | Oportunidade e município IBGE |
 | `licita_ai.saved_searches` | `id` | Consultas reutilizáveis |
+| `licita_ai.tce_expense_municipality_year` | `municipality_ibge_code + year` | Totais anuais por município (micro, EPP, demais, MPE) |
+| `licita_ai.tce_expense_nature_year` | `municipality_ibge_code + year + nature_code` | Detalhamento anual por natureza da despesa |
+| `licita_ai.tce_sync_requests` | `municipality_ibge_code + year` | Fila assíncrona de sincronização TCE-CE |
 
 ## Layout web
 

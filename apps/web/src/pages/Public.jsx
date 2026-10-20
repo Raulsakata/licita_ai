@@ -40,6 +40,76 @@ function MpeComparison({ initial }) {
   );
 }
 
+function pctValue(value) {
+  if (value == null) return '—';
+  return `${(Number(value) * 100).toFixed(1)}%`;
+}
+
+function TceMunicipalityTable({ rows }) {
+  if (!rows?.length) return <p className="empty">Ainda não há municípios sincronizados para este ano.</p>;
+  return (
+    <div className="table-wrap">
+      <div className="scroll"><table><thead><tr>
+        <th>Município do Favorecido</th>
+        <th>Demais Empresas (R$)</th>
+        <th>Microempresa (R$)</th>
+        <th>Empresa de Pequeno Porte (R$)</th>
+        <th>Valor Total (R$)</th>
+        <th>% Micro e Pequena Empresa</th>
+        <th>% Microempresa</th>
+      </tr></thead>
+        <tbody>{rows.map((row) => {
+          const micro = Number(row.micro_amount || 0);
+          const total = Number(row.total_amount || 0);
+          return <tr key={`${row.municipality_ibge_code}-${row.year}`}>
+            <td>{row.municipality_name}</td>
+            <td>{brl(row.demais_amount)}</td>
+            <td>{brl(row.micro_amount)}</td>
+            <td>{brl(row.pequena_amount)}</td>
+            <td>{brl(row.total_amount)}</td>
+            <td>{pctValue(row.mpe_percent)}</td>
+            <td>{total > 0 ? `${((micro / total) * 100).toFixed(1)}%` : '—'}</td>
+          </tr>;
+        })}
+        </tbody></table></div>
+    </div>
+  );
+}
+
+function TceNatureTable({ report }) {
+  const rows = report?.naturezas || [];
+  if (!rows.length) return <p className="empty">Sem detalhamento por natureza para este município/ano.</p>;
+  const total = rows.reduce((acc, row) => ({
+    total: acc.total + Number(row.total_amount || 0),
+    mpe: acc.mpe + Number(row.mpe_amount || 0),
+  }), { total: 0, mpe: 0 });
+  return (
+    <div className="table-wrap">
+      <div className="scroll"><table><thead><tr>
+        <th>Natureza das Despesas</th>
+        <th>Total das Compras (R$)</th>
+        <th>Valor MPE (R$)</th>
+        <th>(%) MPE/Total</th>
+      </tr></thead>
+        <tbody>
+          {rows.map((row) => <tr key={row.nature_code}>
+            <td>{row.nature_name}</td>
+            <td>{brl(row.total_amount)}</td>
+            <td>{brl(row.mpe_amount)}</td>
+            <td>{pctValue(row.mpe_percent)}</td>
+          </tr>)}
+          <tr>
+            <td><b>TOTAL GERAL</b></td>
+            <td><b>{brl(total.total)}</b></td>
+            <td><b>{brl(total.mpe)}</b></td>
+            <td><b>{total.total > 0 ? `${((total.mpe / total.total) * 100).toFixed(1)}%` : '—'}</b></td>
+          </tr>
+        </tbody></table></div>
+      <p className="muted">Fonte: {report?.fonte || 'Portal da Transparência dos Municípios, TCE.CE.GOV.BR'}</p>
+    </div>
+  );
+}
+
 export default function Public() {
   const [filters, setFilters] = useState(defaultFilters());
   const [showOpen, setShowOpen] = useState(false);
@@ -48,10 +118,12 @@ export default function Public() {
   const [monthView, setMonthView] = useState('mpe');
   const mpeOnly = Boolean(filters.municipio);
   const range = toRange(filters);
+  const reportYear = filters.modo === 'ano' ? Number(filters.ano) : Number(range.fim.slice(0, 4));
   const params = { municipio: filters.municipio, ...range };
   const summary = useFetch('/api/publico/resumo', { ...params, somente_mpe: mpeOnly ? 1 : '' });
   const open = useFetch('/api/publico/abertos', { municipio: filters.municipio, somente_mpe: mpeOnly ? 1 : '' });
   const sync = useFetch('/api/publico/sincronizacao', {});
+  const tce = useFetch('/api/publico/compras-municipais', { municipio: filters.municipio, ano: reportYear });
   const s = summary.data;
   const { data: cities } = useFetch('/api/geografia/municipios', {});
   const cityName = cities?.find((city) => String(city.id) === filters.municipio)?.nome;
@@ -85,6 +157,13 @@ export default function Public() {
     <h2 className="section-title" id="painel">Painel</h2>
     <div className="page">
       <Card title="Filtros globais"><Filters filters={filters} onChange={setFilters} /></Card>
+      <Card title={`Compras municipais (TCE-CE) — ${reportYear}`} aside={<span className="muted">{filters.municipio ? scope : `${num(tce.data?.quantidade_municipios || 0)} município(s) sincronizado(s)`}</span>}>
+        {tce.loading && !tce.data ? <p className="empty">Carregando dados do TCE…</p> : null}
+        {tce.error ? <Notice error={tce.error} /> : null}
+        {!tce.loading && tce.data?.status === 'pending' && <p className="notice">Sincronização em fila para este município/ano. Recarregue em instantes.</p>}
+        {!tce.loading && !filters.municipio && tce.data?.status === 'ready' && <TceMunicipalityTable rows={tce.data?.municipios || []} />}
+        {!tce.loading && filters.municipio && tce.data?.status === 'ready' && <TceNatureTable report={tce.data} />}
+      </Card>
       {mpeOnly && <PriorityNotice />}
       <Notice error={summary.error} partial={s?.amostra_limitada} incomplete={s && !s.consulta_completa} />
       <div className="stats">

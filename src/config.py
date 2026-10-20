@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     pncp_base_url: str = "https://pncp.gov.br/api/consulta/v1"
     open_cnpj_base_url: str = "https://api.opencnpj.org"
     ibge_base_url: str = "https://servicodados.ibge.gov.br/api/v1/localidades"
+    tce_base_url: str = "https://api.tce.ce.gov.br/index.php/sim/1_0"
     database_url: str | None = None
     supabase_url: str | None = None
     supabase_secret_key: str | None = None
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
     pncp_scrape_min_interval_seconds: float = 1.0
     pncp_scrape_poll_seconds: int = 30
     pncp_scrape_refresh_seconds: int = 39600
+    tce_sync_poll_seconds: int = 45
 
 
 settings = Settings()

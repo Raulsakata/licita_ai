@@ -14,6 +14,7 @@ import src.pncp_sync as pncp_sync
 import src.pncp_scrape as pncp_scrape
 import src.db as db
 import src.extract as extract
+import src.tce_expenses as tce_expenses
 import worker
 from src.schemas import Eligibility
 from src.transform import assess_eligibility, normalize_opportunity, opportunity_content_hash
@@ -331,7 +332,47 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             api.resolve_municipality("2900000")
         with self.assertRaises(HTTPException):
             api.resolve_period("2026-10-01", "2026-09-01")
+        with self.assertRaises(HTTPException):
+            api.resolve_year("2026-12-01", "2027-01-01", None)
         self.assertEqual(api.resolve_municipality("2304400"), "2304400")
+        self.assertEqual(api.resolve_year(None, None, 2025), 2025)
+
+    async def test_public_municipal_expenses_returns_ready_report(self):
+        report = {
+            "summary": {
+                "municipality_ibge_code": "2300200",
+                "municipality_name": "ACARAU",
+                "year": 2025,
+                "mpe_percent": 0.242,
+                "updated_at": "2026-10-19T12:00:00+00:00",
+                "source_label": "Portal da Transparência dos Municípios, TCE.CE.GOV.BR",
+            },
+            "details": [{"nature_code": "33903900", "nature_name": "OUTROS SERVIÇOS", "mpe_percent": 0.22}],
+        }
+        with patch.object(tce_expenses, "load_municipality_report", MagicMock(return_value=report)), patch.object(
+            tce_expenses, "enqueue_sync_request", MagicMock(return_value=True),
+        ) as enqueue:
+            payload = await api.public_municipal_expenses("2300200", 2025, None, None)
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["resumo"]["municipality_name"], "ACARAU")
+        enqueue.assert_not_called()
+
+    async def test_public_municipal_expenses_enqueues_missing_report(self):
+        with patch.object(tce_expenses, "load_municipality_report", MagicMock(return_value=None)), patch.object(
+            tce_expenses, "enqueue_sync_request", MagicMock(return_value=True),
+        ) as enqueue, patch.object(
+            tce_expenses, "get_sync_request", MagicMock(return_value={"status": "pending"}),
+        ):
+            payload = await api.public_municipal_expenses("2300200", 2025, None, None)
+        self.assertEqual(payload["status"], "pending")
+        enqueue.assert_called_once_with("2300200", 2025)
+
+    async def test_public_municipal_expenses_lists_synced_municipalities(self):
+        rows = [{"municipality_ibge_code": "2300200", "municipality_name": "ACARAU", "year": 2025}]
+        with patch.object(tce_expenses, "list_year_reports", MagicMock(return_value=rows)):
+            payload = await api.public_municipal_expenses(None, 2025, None, None)
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["quantidade_municipios"], 1)
 
     def test_eligibility_labels_non_me_epp_as_not_apt(self):
         base = {"cnpj": "11222333000181", "situacao_cadastral": "Ativa"}
@@ -640,6 +681,73 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((total, items), (1, [item]))
         self.assertFalse(complete)
         self.assertFalse(no_failures)
+
+
+class TceExpensesTests(unittest.TestCase):
+    @staticmethod
+    def _empenho(numero: str, elemento: str, cnpj: str = "45585795000185", orgao: str = "05") -> dict:
+        return {
+            "codigo_municipio": "004", "exercicio_orcamento": "202500", "codigo_orgao": orgao,
+            "codigo_unidade": "01  ", "data_emissao_empenho": "2025-01-02 00:00:00",
+            "numero_empenho": numero, "codigo_elemento_despesa": elemento, "numero_documento_negociante": cnpj,
+        }
+
+    @staticmethod
+    def _pagamento(numero: str, nota: str, valor: str, estornado: str = "0", orgao: str = "05") -> dict:
+        return {
+            "codigo_municipio": "004", "exercicio_orcamento": "202500", "codigo_orgao": orgao,
+            "codigo_unidade": "01", "data_emissao_empenho": "2025-01-02 00:00:00", "numero_empenho": numero,
+            "numero_sub_empenho": "001", "numero_nota_pagamento": nota, "data_nota_pagamento": "2025-03-01 00:00:00",
+            "valor_nota_pagamento": valor, "estado_de_estornado": estornado, "data_referencia": "202503",
+        }
+
+    def test_aggregate_filters_and_sums_each_note_once(self):
+        empenhos = [self._empenho("1", "33903900"), self._empenho("2", "33909300"), self._empenho("3", "44905200")]
+        pagamentos = [
+            self._pagamento("1", "A", "100.50"),
+            self._pagamento("1", "A", "100.50"),  # nota repetida na paginação
+            self._pagamento("1", "B", "10", estornado="1"),  # estornada
+            self._pagamento("2", "C", "999"),  # elemento 93 inválido
+            self._pagamento("3", "D", "20"),
+            self._pagamento("9", "E", "5"),  # sem empenho
+        ]
+        result = tce_expenses.aggregate_payments(empenhos, pagamentos)
+        self.assertEqual(result["by_element"]["39"]["total"], tce_expenses.Decimal("100.50"))
+        self.assertEqual(result["by_element"]["52"]["total"], tce_expenses.Decimal("20"))
+        self.assertNotIn("93", result["by_element"])
+        self.assertEqual((result["matched"], result["unmatched"]), (2, 1))
+
+    def test_select_orgaos_excludes_camara(self):
+        orgaos = [
+            {"codigo_orgao": "01", "nome_orgao": "Câmara Municipal de Acaraú"},
+            {"codigo_orgao": "AA", "nome_orgao": "Prefeitura Municipal"},
+            {"codigo_orgao": "05", "nome_orgao": "Secretaria de Educação"},
+        ]
+        self.assertEqual(tce_expenses.select_orgaos(orgaos), ["05", "AA"])
+
+    def test_porte_only_code_01_is_me(self):
+        self.assertEqual(tce_expenses._normalize_porte(tce_expenses._porte_codigo({"porte_empresa": "Microempresa (ME)"})), "micro")
+        self.assertEqual(tce_expenses._normalize_porte(tce_expenses._porte_codigo({"porte_codigo": "03"})), "pequena")
+        self.assertEqual(tce_expenses._normalize_porte(tce_expenses._porte_codigo({"porte_empresa": "Demais"})), "demais")
+        self.assertEqual(tce_expenses._normalize_porte(tce_expenses._porte_codigo({})), "desconhecido")
+
+    def test_paginate_stops_when_server_ignores_start_index(self):
+        full_page = [{"id": index} for index in range(tce_expenses.PAGE_SIZE)]
+        calls = []
+
+        def fake_request(path, params):
+            calls.append(params["$start_index"])
+            return full_page  # servidor real repete a mesma página
+
+        with patch.object(tce_expenses, "_request_content", fake_request):
+            rows = tce_expenses._paginate("notas_pagamentos", {})
+        self.assertEqual(len(rows), tce_expenses.PAGE_SIZE)
+        self.assertEqual(calls, [0, 1000])
+
+    def test_paginate_walks_real_pages(self):
+        pages = {0: [{"id": i} for i in range(1000)], 1000: [{"id": i} for i in range(1000, 1300)]}
+        with patch.object(tce_expenses, "_request_content", lambda path, params: pages.get(params["$start_index"], [])):
+            self.assertEqual(len(tce_expenses._paginate("x", {})), 1300)
 
 
 if __name__ == "__main__":

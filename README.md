@@ -33,6 +33,8 @@ O serviço `worker` separado executa a sincronização do PNCP, consome a fila p
 
 O painel conta Pregões Eletrônicos publicados no último mês. O valor associado a ME/EPP é uma estimativa parcial baseada em até 50 registros por UF com menção textual explícita; não representa o valor total oficial de todas as cotas ou itens reservados.
 
+Para os relatórios anuais de compras municipais por natureza da despesa, a API integra o SIM/TCE-CE (`liquidacoes`, `notas_empenhos`, `despesa_categoria_economica`, `orgaos` e `municipios`) e persiste agregados por município/ano no Supabase. A coleta é assíncrona via fila (`licita_ai.tce_sync_requests`) processada pelo `worker.py`, para não impactar as rotas públicas.
+
 ## APIs e rotas
 
 - IBGE: `GET /api/geografia/regioes` retorna somente o Nordeste; `GET /api/geografia/regioes/{id}/municipios` aceita a região Nordeste (`id=2`).
@@ -41,6 +43,7 @@ O painel conta Pregões Eletrônicos publicados no último mês. O valor associa
 - PNCP por cidade: `GET /api/municipios/{codigo_ibge}/licitacoes` — `codigoModalidadeContratacao` é **obrigatório** (exigência da própria API do PNCP) e `tamanhoPagina` deve estar entre 10 e 50.
 - PNCP geral: `GET /api/pncp/contratacoes` — exige UF nordestina e aplica as regras de `codigoModalidadeContratacao` e `tamanhoPagina` acima.
 - OpenCNPJ e avaliação: `GET /api/empresas/{cnpj}/elegibilidade`.
+- Compras municipais (TCE-CE): `GET /api/publico/compras-municipais?municipio={ibge7}&ano={AAAA}` para detalhamento por natureza, ou sem `municipio` para listar municípios já sincronizados no ano.
 - Consultas salvas: `GET /api/consultas-salvas`, `POST /api/consultas-salvas` e `DELETE /api/consultas-salvas/{id}` (persistidas em `licita_ai.saved_searches`).
 
 > Nota: a API é exclusivamente o FastAPI em `src/api.py` (servida pelo `Dockerfile` na raiz via `render.yaml`). Uma implementação Node/Express paralela e não utilizada (`apps/api`) foi removida do repositório.
@@ -50,6 +53,10 @@ Veja a arquitetura de dados e do painel em `docs/architecture.md`.
 ## Testes
 
 Com as dependências instaladas no ambiente Python do projeto, execute `python -m unittest discover -s tests -v`. Os testes usam respostas simuladas e não precisam de credenciais nem de chamadas externas.
+
+Para validar a planilha de referência contra o banco:
+
+`python scripts/validate_tce_workbook.py --xlsx "C:\Users\User\Downloads\COMPRAS MUNICIPAIS - ACARAÚ.xlsx" --municipio 2300200 --ano 2025`
 
 ## Deploy
 

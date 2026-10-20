@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from src import extract, licitacoes, pncp_scrape, pncp_sync
+from src import extract, licitacoes, pncp_scrape, pncp_sync, tce_expenses
 from src.config import settings
 from src.db import get_db, get_geographic_reference, save_geographic_reference
 from src.logger import logger
@@ -72,7 +72,22 @@ async def run_worker() -> None:
         pncp_sync.scheduler_loop(),
         scrape_queue_loop(),
         geography_refresh_loop(),
+        tce_sync_loop(),
     )
+
+
+async def tce_sync_loop() -> None:
+    """Processa em background a fila de sincronização de compras municipais (TCE-CE)."""
+    while True:
+        try:
+            result = await tce_expenses.process_sync_queue(batch_size=1)
+            if result.get("status") == "ok" and result.get("processed"):
+                logger.info("Sincronização TCE concluída para %s item(ns) da fila", result["processed"])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Falha no worker de sincronização TCE; nova tentativa em %s s", settings.tce_sync_poll_seconds)
+        await asyncio.sleep(settings.tce_sync_poll_seconds)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import httpx
-from src import auth, cnae, licitacoes, pncp_sync, suppliers
+from src import auth, cnae, licitacoes, pncp_sync, suppliers, tce_expenses
 from src.config import settings
 from src.db import (
     COMPANY_PUBLIC_COLUMNS, count_rows, create_saved_search, delete_company, delete_saved_search, get_company, get_db,
@@ -62,6 +62,17 @@ def resolve_modality(code: int | None) -> tuple[int, ...]:
     if code not in MODALIDADE_CODES:
         raise HTTPException(400, "Código de modalidade de contratação inválido")
     return (code,)
+
+
+def resolve_year(inicio: str | None, fim: str | None, ano: int | None) -> int:
+    if ano is not None:
+        if ano < 2000 or ano > date.today().year:
+            raise HTTPException(400, "Ano inválido para consulta do TCE")
+        return ano
+    start, end = resolve_period(inicio, fim)
+    if start.year != end.year:
+        raise HTTPException(400, "Selecione um período dentro do mesmo ano para o relatório anual do TCE")
+    return end.year
 
 
 def public_company(row: dict) -> dict:
@@ -177,6 +188,49 @@ async def public_mpe_ceara():
 @app.get("/api/publico/sincronizacao")
 async def public_sync_status():
     return await pncp_sync.sync_status()
+
+
+@app.get("/api/publico/compras-municipais")
+async def public_municipal_expenses(
+    municipio: str | None = None,
+    ano: int | None = Query(None, ge=2000),
+    inicio: str | None = None,
+    fim: str | None = None,
+):
+    year = resolve_year(inicio, fim, ano)
+    if municipio:
+        municipality = resolve_municipality(municipio)
+        report = await asyncio.to_thread(tce_expenses.load_municipality_report, municipality, year)
+        if report:
+            summary = report["summary"]
+            details = report["details"]
+            return {
+                "status": "ready",
+                "municipio": municipality,
+                "ano": year,
+                "atualizado_em": summary.get("updated_at"),
+                "fonte": summary.get("source_label"),
+                "resumo": summary,
+                "naturezas": details,
+            }
+        queued = await asyncio.to_thread(tce_expenses.enqueue_sync_request, municipality, year)
+        request_state = await asyncio.to_thread(tce_expenses.get_sync_request, municipality, year)
+        return {
+            "status": "pending" if queued else "unavailable",
+            "municipio": municipality,
+            "ano": year,
+            "mensagem": "Sincronização em andamento no worker. Atualize em instantes.",
+            "fila": request_state,
+        }
+
+    rows = await asyncio.to_thread(tce_expenses.list_year_reports, year)
+    return {
+        "status": "ready",
+        "ano": year,
+        "municipios": rows,
+        "quantidade_municipios": len(rows),
+        "fonte": tce_expenses.SOURCE_LABEL,
+    }
 
 
 @app.post("/api/internal/sync-pncp", include_in_schema=False)
